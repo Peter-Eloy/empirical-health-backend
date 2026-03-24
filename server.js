@@ -97,6 +97,27 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
+// Test Kimi API key
+app.get('/test-kimi', async (req, res) => {
+  try {
+    const response = await fetch('https://api.moonshot.cn/v1/models', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${KIMI_API_KEY}`,
+      },
+    });
+    
+    const data = await response.text();
+    res.json({
+      status: response.status,
+      keyPrefix: KIMI_API_KEY.substring(0, 15),
+      response: data
+    });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 // Get trial status
 app.get('/v1/user/trial', requireAuth, (req, res) => {
   const userId = req.userId;
