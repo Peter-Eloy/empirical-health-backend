@@ -23,8 +23,6 @@ const PORT = 3000;
 console.log('🦈 Starting Empirical Health API...');
 console.log('Port:', PORT);
 console.log('Kimi API Key present:', !!KIMI_API_KEY);
-console.log('Kimi API Key length:', KIMI_API_KEY ? KIMI_API_KEY.length : 0);
-console.log('Kimi API Key starts with:', KIMI_API_KEY ? KIMI_API_KEY.substring(0, 10) + '...' : 'none');
 
 // In-memory storage
 const users = new Map();
@@ -135,12 +133,13 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
     }
     
     if (!KIMI_API_KEY) {
-      return res.json({ 
-        message: "Lo siento mijo, I'm not fully configured yet. Please try again later! 🦈" 
+      return res.status(500).json({ 
+        error: 'API not configured',
+        message: "Lo siento mijo, the AI service is not configured yet. Please try again later! 🦈"
       });
     }
     
-    // Rate limiting
+    // Rate limiting: 20 messages per minute per user
     const now = Date.now();
     if (!user.lastMessageTime) user.lastMessageTime = [];
     user.lastMessageTime = user.lastMessageTime.filter(t => now - t < 60000);
@@ -158,8 +157,6 @@ Current Health Context:
 ${JSON.stringify(context || {}, null, 2)}
 
 Respond as Don Vicente. Be warm, practical, and concise.`;
-    
-    console.log('Calling Kimi API with key starting with:', KIMI_API_KEY.substring(0, 15) + '...');
     
     // Call Kimi API
     const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
@@ -188,6 +185,7 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
     const data = await response.json();
     const reply = data.choices[0]?.message?.content || "Lo siento, I'm having trouble right now.";
     
+    console.log('Kimi response received');
     res.json({ message: reply });
     
   } catch (error) {
