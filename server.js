@@ -15,7 +15,7 @@ app.use(cors({
 app.use(express.json());
 
 // Environment variables
-const KIMI_API_KEY = process.env.KIMI_API_KEY;
+const KIMI_API_KEY = process.env.KIMI_API_KEY ? process.env.KIMI_API_KEY.trim() : null;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-in-production';
 const PORT = 3000;
 
