@@ -23,6 +23,8 @@ const PORT = 3000;
 console.log('🦈 Starting Empirical Health API...');
 console.log('Port:', PORT);
 console.log('Kimi API Key present:', !!KIMI_API_KEY);
+console.log('Kimi API Key length:', KIMI_API_KEY ? KIMI_API_KEY.length : 0);
+console.log('Kimi API Key starts with:', KIMI_API_KEY ? KIMI_API_KEY.substring(0, 10) + '...' : 'none');
 
 // In-memory storage
 const users = new Map();
@@ -156,6 +158,8 @@ Current Health Context:
 ${JSON.stringify(context || {}, null, 2)}
 
 Respond as Don Vicente. Be warm, practical, and concise.`;
+    
+    console.log('Calling Kimi API with key starting with:', KIMI_API_KEY.substring(0, 15) + '...');
     
     // Call Kimi API
     const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
