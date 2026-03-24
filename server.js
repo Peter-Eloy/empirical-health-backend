@@ -20,7 +20,8 @@ const PORT = process.env.PORT || 3000;
 
 // Log startup info
 console.log('🦈 Starting Empirical Health API...');
-console.log('Port:', PORT);
+console.log('Port from env:', process.env.PORT);
+console.log('Port using:', PORT);
 console.log('Kimi API Key present:', !!KIMI_API_KEY);
 
 if (!KIMI_API_KEY) {
@@ -206,9 +207,18 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
   }
 });
 
-// Start server - bind to 0.0.0.0 for Railway
-app.listen(PORT, '0.0.0.0', () => {
+// Start server - MUST use Railway's PORT env var
+const server = app.listen(PORT, '0.0.0.0', (err) => {
+  if (err) {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  }
   console.log(`🦈 Empirical Health API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`Health check: http://0.0.0.0:${PORT}/health`);
+});
+
+// Handle errors
+server.on('error', (err) => {
+  console.error('Server error:', err);
 });
