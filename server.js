@@ -95,9 +95,9 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check endpoint for Railway
+// Health check endpoint for Railway - MUST return 200 quickly
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
+  res.status(200).json({ status: 'healthy', timestamp: Date.now() });
 });
 
 // Get trial status
@@ -206,7 +206,7 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
   }
 });
 
-// Start server
+// Start server - bind to 0.0.0.0 for Railway
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🦈 Empirical Health API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
