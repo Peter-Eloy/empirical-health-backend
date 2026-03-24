@@ -26,6 +26,7 @@ console.log('Kimi API Key present:', !!KIMI_API_KEY);
 
 // In-memory storage
 const users = new Map();
+const userMemories = new Map(); // userId -> { events: [], insights: [], profile: {} }
 
 // Vicente's persona - Psychology Framework: FIRM → HOPE → PUSH
 const VICENTE_PERSONA = `You are Don Vicente "El Tiburón" (The Shark), a wise Cuban/Miami health coach who helps people manage diabetes.
@@ -98,6 +99,19 @@ const checkAccess = (req, res, next) => {
   next();
 };
 
+// Initialize user memory
+const getUserMemory = (userId) => {
+  if (!userMemories.has(userId)) {
+    userMemories.set(userId, {
+      events: [],
+      insights: [],
+      profile: {},
+      conversationHistory: []
+    });
+  }
+  return userMemories.get(userId);
+};
+
 // Health check - Railway needs this!
 app.get('/', (req, res) => {
   res.json({ 
@@ -111,27 +125,6 @@ app.get('/', (req, res) => {
 // Health check endpoint for Railway
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
-});
-
-// Test Kimi API key
-app.get('/test-kimi', async (req, res) => {
-  try {
-    const response = await fetch('https://api.moonshot.ai/v1/models', {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${KIMI_API_KEY}`,
-      },
-    });
-    
-    const data = await response.text();
-    res.json({
-      status: response.status,
-      keyPrefix: KIMI_API_KEY.substring(0, 15),
-      response: data
-    });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
 });
 
 // Get trial status
@@ -157,13 +150,14 @@ app.get('/v1/user/trial', requireAuth, (req, res) => {
   });
 });
 
-// Main chat endpoint
+// Main chat endpoint with memory context
 app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
   console.log('Received chat request from:', req.userId);
   
   try {
     const { message, context } = req.body;
     const user = req.user;
+    const userId = req.userId;
     
     if (!message) {
       return res.status(400).json({ error: 'Message required' });
@@ -187,15 +181,42 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
     user.lastMessageTime.push(now);
     user.messageCount++;
     
-    // Build system prompt
+    // Get user's memory
+    const memory = getUserMemory(userId);
+    
+    // Build system prompt with memory
+    const memoryContext = [];
+    
+    if (memory.events.length > 0) {
+      memoryContext.push(`\nIMPORTANT EVENTS I'VE LOGGED:\n${memory.events.slice(-5).map(e => `- ${e.title} (${e.date}): ${e.details}`).join('\n')}`);
+    }
+    
+    if (memory.insights.length > 0) {
+      memoryContext.push(`\nPATTERNS I'VE LEARNED ABOUT YOU:\n${memory.insights.map(i => `- ${i.description}`).join('\n')}`);
+    }
+    
+    if (Object.keys(memory.profile).length > 0) {
+      memoryContext.push(`\nYOUR PREFERENCES:\n${Object.entries(memory.profile).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`);
+    }
+
     const systemPrompt = `${VICENTE_PERSONA}
 
 Current Health Context:
-${JSON.stringify(context || {}, null, 2)}
+${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}
 
-Respond as Don Vicente. Be warm, practical, and concise.`;
+You can REMEMBER things about this user. When they tell you something important (food reactions, stress events, preferences, goals), respond with a message and include what you want to remember in this EXACT format at the END of your message:
+
+[MEMORY:logEvent|{"type": "food_reaction", "severity": 4, "title": "Pizza spike", "details": "User ate pizza and spiked to 250", "tags": ["pizza", "high_carb"]}]
+
+Or for preferences:
+[MEMORY:setPreference|{"key": "favorite_food", "value": "tacos"}]
+
+Or for insights:
+[MEMORY:addInsight|{"patternType": "pizza_reaction", "description": "Pizza consistently causes glucose spikes for this user", "confidence": 85}]
+
+Only use [MEMORY:...] when something is truly worth remembering. Most responses won't need it.`;
     
-    // Call Kimi API with exact format from platform
+    // Call Kimi API
     const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -210,22 +231,47 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
         ],
         temperature: 0.7,
         max_tokens: 500,
-        top_p: 1,
       }),
     });
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Kimi API error details:');
-      console.error('  Status:', response.status);
-      console.error('  StatusText:', response.statusText);
-      console.error('  Response:', errorText);
-      console.error('  Key used (first 20 chars):', KIMI_API_KEY.substring(0, 20));
+      console.error('Kimi API error:', response.status, errorText);
       throw new Error(`Kimi API error: ${response.status}`);
     }
     
     const data = await response.json();
-    const reply = data.choices[0]?.message?.content || "Lo siento, I'm having trouble right now.";
+    let reply = data.choices[0]?.message?.content || "Lo siento, I'm having trouble right now.";
+    
+    // Parse and process memory commands
+    const memoryMatches = reply.match(/\[MEMORY:(\w+)\|({.+?})\]/g);
+    if (memoryMatches) {
+      memoryMatches.forEach(match => {
+        const [, action, jsonStr] = match.match(/\[MEMORY:(\w+)\|({.+?})\]/);
+        try {
+          const data = JSON.parse(jsonStr);
+          
+          if (action === 'logEvent') {
+            memory.events.push({ ...data, date: new Date().toISOString() });
+            console.log(`[Memory] Logged event for ${userId}: ${data.title}`);
+          } else if (action === 'setPreference') {
+            memory.profile[data.key] = data.value;
+            console.log(`[Memory] Set preference for ${userId}: ${data.key} = ${data.value}`);
+          } else if (action === 'addInsight') {
+            memory.insights.push({ ...data, date: new Date().toISOString() });
+            console.log(`[Memory] Added insight for ${userId}: ${data.patternType}`);
+          }
+          
+          // Remove the memory command from the reply
+          reply = reply.replace(match, '');
+        } catch (e) {
+          console.error('[Memory] Failed to parse memory command:', e);
+        }
+      });
+    }
+    
+    // Clean up the reply
+    reply = reply.trim();
     
     console.log('Kimi response received');
     res.json({ message: reply });
@@ -237,6 +283,12 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
       message: "Ay, mijo, I'm having trouble connecting. Try again in a moment. 🦈"
     });
   }
+});
+
+// Get user's memory (for debugging)
+app.get('/v1/vicente/memory', requireAuth, (req, res) => {
+  const memory = getUserMemory(req.userId);
+  res.json(memory);
 });
 
 // Listen on 0.0.0.0 so Railway can reach it
