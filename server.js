@@ -159,6 +159,9 @@ ${JSON.stringify(context || {}, null, 2)}
 Respond as Don Vicente. Be warm, practical, and concise.`;
     
     // Call Kimi API
+    console.log('Sending request to Kimi API...');
+    console.log('Auth header format:', `Bearer ${KIMI_API_KEY.substring(0, 10)}...`);
+    
     const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
       method: 'POST',
       headers: {
