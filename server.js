@@ -177,8 +177,12 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
     });
     
     if (!response.ok) {
-      const error = await response.text();
-      console.error('Kimi API error:', response.status, error);
+      const errorText = await response.text();
+      console.error('Kimi API error details:');
+      console.error('  Status:', response.status);
+      console.error('  StatusText:', response.statusText);
+      console.error('  Response:', errorText);
+      console.error('  Key used (first 20 chars):', KIMI_API_KEY.substring(0, 20));
       throw new Error(`Kimi API error: ${response.status}`);
     }
     
