@@ -100,7 +100,7 @@ app.get('/health', (req, res) => {
 // Test Kimi API key
 app.get('/test-kimi', async (req, res) => {
   try {
-    const response = await fetch('https://api.moonshot.cn/v1/models', {
+    const response = await fetch('https://api.moonshot.ai/v1/models', {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${KIMI_API_KEY}`,
@@ -180,7 +180,7 @@ ${JSON.stringify(context || {}, null, 2)}
 Respond as Don Vicente. Be warm, practical, and concise.`;
     
     // Call Kimi API with exact format from platform
-    const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+    const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
