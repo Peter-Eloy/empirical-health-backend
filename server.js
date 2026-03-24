@@ -179,10 +179,7 @@ ${JSON.stringify(context || {}, null, 2)}
 
 Respond as Don Vicente. Be warm, practical, and concise.`;
     
-    // Call Kimi API
-    console.log('Sending request to Kimi API...');
-    console.log('Auth header format:', `Bearer ${KIMI_API_KEY.substring(0, 10)}...`);
-    
+    // Call Kimi API with exact format from platform
     const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -190,13 +187,14 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
         'Authorization': `Bearer ${KIMI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'kimi-latest',
+        model: 'kimi-k2-0905-preview',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: message },
         ],
         temperature: 0.7,
         max_tokens: 500,
+        top_p: 1,
       }),
     });
     
