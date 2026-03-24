@@ -1,11 +1,16 @@
 const express = require('express');
 const cors = require('cors');
-const jwt = require('jsonwebtoken');
 
 const app = express();
 
-// Middleware
-app.use(cors());
+// CORS - allow all origins for mobile app
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 app.use(express.json());
 
 // Environment variables
@@ -13,12 +18,16 @@ const KIMI_API_KEY = process.env.KIMI_API_KEY;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-in-production';
 const PORT = process.env.PORT || 3000;
 
+// Log startup info
+console.log('🦈 Starting Empirical Health API...');
+console.log('Port:', PORT);
+console.log('Kimi API Key present:', !!KIMI_API_KEY);
+
 if (!KIMI_API_KEY) {
-  console.error('ERROR: KIMI_API_KEY not set!');
-  process.exit(1);
+  console.warn('⚠️  WARNING: KIMI_API_KEY not set! AI will not work.');
 }
 
-// In-memory storage (use Redis/DB in production)
+// In-memory storage
 const users = new Map();
 
 // Vicente's persona
@@ -29,7 +38,6 @@ Personality:
 - Uses occasional Spanish (mijo, vamos, perfecto)
 - Calls yourself "El Tiburón"
 - Practical medical advice with heart
-- Celebrate wins, guide through challenges
 
 Expertise: Type 1/2 diabetes, exercise & glucose, nutrition, insulin sensitivity, CGM data.
 
@@ -43,13 +51,8 @@ const requireAuth = (req, res, next) => {
   }
   
   const token = auth.replace('Bearer ', '');
-  try {
-    // For now, accept any token format - in production verify JWT
-    req.userId = token; // Use token as user ID for now
-    next();
-  } catch (e) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
+  req.userId = token;
+  next();
 };
 
 // Check trial/subscription
@@ -57,7 +60,6 @@ const checkAccess = (req, res, next) => {
   const userId = req.userId;
   
   if (!users.has(userId)) {
-    // New user - create with trial
     users.set(userId, {
       installDate: new Date(),
       isSubscribed: false,
@@ -83,9 +85,19 @@ const checkAccess = (req, res, next) => {
   next();
 };
 
-// Health check
+// Health check - Railway needs this!
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'Empirical Health API' });
+  res.json({ 
+    status: 'ok', 
+    service: 'Empirical Health API',
+    version: '1.0.0',
+    kimiConfigured: !!KIMI_API_KEY
+  });
+});
+
+// Health check endpoint for Railway
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy' });
 });
 
 // Get trial status
@@ -113,12 +125,24 @@ app.get('/v1/user/trial', requireAuth, (req, res) => {
 
 // Main chat endpoint
 app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
+  console.log('Received chat request from:', req.userId);
+  console.log('Message:', req.body.message?.substring(0, 50) + '...');
+  
   try {
     const { message, context } = req.body;
     const user = req.user;
     
     if (!message) {
+      console.log('Error: No message provided');
       return res.status(400).json({ error: 'Message required' });
+    }
+    
+    // Check if Kimi is configured
+    if (!KIMI_API_KEY) {
+      console.log('Error: Kimi API key not configured');
+      return res.json({ 
+        message: "Lo siento mijo, I'm not fully configured yet. The admin needs to add the AI API key. Please try again later! 🦈" 
+      });
     }
     
     // Rate limiting: 20 messages per minute per user
@@ -127,6 +151,7 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
     user.lastMessageTime = user.lastMessageTime.filter(t => now - t < 60000);
     
     if (user.lastMessageTime.length > 20) {
+      console.log('Rate limit exceeded for user:', req.userId);
       return res.status(429).json({ error: 'Rate limit exceeded' });
     }
     user.lastMessageTime.push(now);
@@ -139,6 +164,8 @@ Current Health Context:
 ${JSON.stringify(context || {}, null, 2)}
 
 Respond as Don Vicente. Be warm, practical, and concise.`;
+    
+    console.log('Calling Kimi API...');
     
     // Call Kimi API
     const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
@@ -160,17 +187,18 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
     
     if (!response.ok) {
       const error = await response.text();
-      console.error('Kimi API error:', error);
+      console.error('Kimi API error:', response.status, error);
       throw new Error(`Kimi API error: ${response.status}`);
     }
     
     const data = await response.json();
     const reply = data.choices[0]?.message?.content || "Lo siento, I'm having trouble right now.";
     
+    console.log('Kimi response:', reply.substring(0, 50) + '...');
     res.json({ message: reply });
     
   } catch (error) {
-    console.error('Chat error:', error);
+    console.error('Chat error:', error.message);
     res.status(500).json({ 
       error: 'Internal error',
       message: "Ay, mijo, I'm having trouble connecting. Try again in a moment. 🦈"
@@ -178,14 +206,9 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
   }
 });
 
-// Webhook for App Store (for when you add subscriptions)
-app.post('/webhooks/appstore', (req, res) => {
-  // TODO: Verify Apple receipt and update user subscription status
-  console.log('App Store webhook:', req.body);
-  res.sendStatus(200);
-});
-
-app.listen(PORT, () => {
+// Start server
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🦈 Empirical Health API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
 });
