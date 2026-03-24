@@ -207,15 +207,11 @@ Respond as Don Vicente. Be warm, practical, and concise.`;
   }
 });
 
-// Start server - MUST use Railway's PORT env var
-const server = app.listen(PORT, '0.0.0.0', (err) => {
-  if (err) {
-    console.error('Failed to start server:', err);
-    process.exit(1);
-  }
+// Start server - Railway assigns PORT automatically
+const server = app.listen(PORT, () => {
   console.log(`🦈 Empirical Health API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`Health check: http://0.0.0.0:${PORT}/health`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
 });
 
 // Handle errors
