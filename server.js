@@ -155,7 +155,7 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
   console.log('Received chat request from:', req.userId);
   
   try {
-    const { message, context } = req.body;
+    const { message, context, persona } = req.body;
     const user = req.user;
     const userId = req.userId;
     
@@ -166,7 +166,7 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
     if (!KIMI_API_KEY) {
       return res.status(500).json({ 
         error: 'API not configured',
-        message: "Lo siento mijo, the AI service is not configured yet. Please try again later! 🦈"
+        message: "AI service not configured. Please try again later! 🦈"
       });
     }
     
@@ -199,7 +199,10 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
       memoryContext.push(`\nYOUR PREFERENCES:\n${Object.entries(memory.profile).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`);
     }
 
-    const systemPrompt = `${VICENTE_PERSONA}
+    // Use persona from app if provided, otherwise use default
+    const activePersona = persona || VICENTE_PERSONA;
+    
+    const systemPrompt = `${activePersona}
 
 Current Health Context:
 ${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}
@@ -241,7 +244,7 @@ Only use [MEMORY:...] when something is truly worth remembering. Most responses 
     }
     
     const data = await response.json();
-    let reply = data.choices[0]?.message?.content || "Lo siento, I'm having trouble right now.";
+    let reply = data.choices[0]?.message?.content || "I'm having trouble right now."
     
     // Parse and process memory commands
     const memoryMatches = reply.match(/\[MEMORY:(\w+)\|({.+?})\]/g);
@@ -280,7 +283,7 @@ Only use [MEMORY:...] when something is truly worth remembering. Most responses 
     console.error('Chat error:', error.message);
     res.status(500).json({ 
       error: 'Internal error',
-      message: "Ay, mijo, I'm having trouble connecting. Try again in a moment. 🦈"
+      message: "Having trouble connecting. Try again in a moment. 🦈"
     });
   }
 });
