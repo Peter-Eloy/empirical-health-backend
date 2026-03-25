@@ -297,7 +297,7 @@ TREND ARROW LEGEND (LibreView CGM):
     const systemPrompt = `${activePersona}
 
 Current Health Context:
-${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}${trendLegend}`
+${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}${trendLegend}
 
 You can REMEMBER things about this user. When they tell you something important (food reactions, stress events, preferences, goals), respond with a message and include what you want to remember in this EXACT format at the END of your message:
 
