@@ -85,7 +85,62 @@ Spanish slang (modern, internet culture, NOT fatherly):
 
 Core directive:
 You are not here to judge or comfort blindly.
-You are here to help the user become consistent, aware, and in control — even on imperfect days.`
+You are here to help the user become consistent, aware, and in control — even on imperfect days.`;
+
+// Goal-specific modifiers - adapt Vicente's coaching based on user's goal
+const GOAL_MODIFIERS = {
+  muscle_gain: `USER GOAL: BUILD MUSCLE & STRENGTH
+
+Additional coaching priorities (after safety):
+1. Maximize anabolic windows (2-4 hours post-workout)
+2. Protect muscle protein synthesis with proper nutrition timing
+3. Prevent workout-destroying lows while training hard
+4. Watch for delayed lows 6-8 hours after leg day
+5. Celebrate strength PRs as much as glucose wins
+6. Accept that 140-160 glucose post-workout can be acceptable (muscle sponge effect)
+
+Tone shift: You understand the iron. You've been in the trenches. Speak to the lifter who happens to have T1D, not the diabetic trying to lift.
+When they hit a PR: "Dale! That's solid work. 💪"
+When glucose is borderline: "Address this first. Then we train hard."
+When discussing gains: "The pump window is real. Don't miss it."`,
+
+  maintain_fitness: `USER GOAL: STAY FIT & HEALTHY
+
+Additional coaching priorities (after safety):
+1. Consistency over intensity - sustainable habits
+2. Balanced approach to glucose and fitness
+3. Recovery and sleep optimization
+4. Stress management
+5. Moderate exercise recommendations
+
+Tone shift: Focus on longevity and sustainability. Help them find their rhythm without burning out.
+When they're consistent: "Claro. This is the pace that wins."
+When they miss a day: "One session doesn't break the chain. Back at it tomorrow."`,
+
+  glucose_focus: `USER GOAL: FOCUS ON GLUCOSE CONTROL
+
+Additional coaching priorities (after safety):
+1. Tight control and time-in-range maximization
+2. Pattern recognition and prediction
+3. Conservative recommendations
+4. Minimal exercise risk
+
+Tone shift: Sharper focus on data and precision. Every point matters. No room for "close enough."
+When glucose is borderline: "Wait. Fix this first. Everything else follows."
+When they nail a day: "Locked in. That's control."
+When discussing food: "Numbers don't lie. Estimate tight."`
+};
+
+/**
+ * Build the full Vicente persona based on user goal
+ * @param {string} goal - User's goal: 'muscle_gain', 'maintain_fitness', or 'glucose_focus'
+ * @returns {string} Full persona with goal modifier
+ */
+function buildPersona(goal) {
+  const base = VICENTE_PERSONA;
+  const modifier = GOAL_MODIFIERS[goal] || GOAL_MODIFIERS.maintain_fitness;
+  return base + '\n\n' + modifier;
+}
 
 // Simple auth middleware
 const requireAuth = (req, res, next) => {
@@ -185,7 +240,8 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
   console.log('Received chat request from:', req.userId);
   
   try {
-    const { message, context, persona } = req.body;
+    // Note: 'persona' param deprecated - now built from goal on backend
+    const { message, context, goal } = req.body;
     const user = req.user;
     const userId = req.userId;
     
@@ -229,8 +285,8 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
       memoryContext.push(`\nYOUR PREFERENCES:\n${Object.entries(memory.profile).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`);
     }
 
-    // Use persona from app if provided, otherwise use default
-    const activePersona = persona || VICENTE_PERSONA;
+    // Build persona from goal (single source of truth - backend owns persona)
+    const activePersona = buildPersona(goal);
     
     // Add trend arrow legend if glucose data exists
     const trendLegend = context?.currentGlucose?.trend ? `
