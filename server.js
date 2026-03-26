@@ -294,10 +294,24 @@ TREND ARROW LEGEND (LibreView CGM):
 1 = ↓ (falling fast)  |  2 = ↘ (falling slowly)  |  3 = → (flat/stable)
 4 = ↗ (rising slowly) |  5 = ↑ (rising)          |  6 = ↑↑ (rising fast)` : '';
     
+    // Add insulin profile guidance if available
+    const insulinGuide = context?.insulinProfile ? `
+USER'S INSULIN PROFILE:
+Delivery: ${context.insulinProfile.deliveryMethod}
+Bolus: ${context.insulinProfile.bolus.name} (${context.insulinProfile.bolus.brands.join('/')}) - ${context.insulinProfile.bolus.durationHours}h duration
+Basal: ${context.insulinProfile.basal.name} (${context.insulinProfile.basal.brands.join('/')}) - ${context.insulinProfile.basal.durationHours}h ${context.insulinProfile.basal.peakInfo}
+Timing: ${context.insulinProfile.basal.timing}
+
+INSULIN ADVICE GUIDELINES:
+- Bolus insulin (${context.insulinProfile.bolus.durationHours}h active): Used for meal corrections, pre-bolus timing critical
+- Basal insulin: Background coverage, ${context.insulinProfile.basal.name === 'Ultra-Long Basal' ? 'ultra-stable, minimal peak' : 'some peak effect'}
+- ${context.insulinProfile.deliveryMethod === 'pump' ? 'Pump user: Basal is continuous, can suspend for lows' : 'Injection user: Basal injected ' + context.insulinProfile.basal.timing}
+- IOB calculation uses ${context.insulinProfile.bolus.durationHours}h for bolus, ${context.insulinProfile.basal.durationHours}h for basal` : '';
+    
     const systemPrompt = `${activePersona}
 
 Current Health Context:
-${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}${trendLegend}
+${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}${trendLegend}${insulinGuide}`
 
 You can REMEMBER things about this user. When they tell you something important (food reactions, stress events, preferences, goals), respond with a message and include what you want to remember in this EXACT format at the END of your message:
 
