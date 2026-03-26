@@ -24,9 +24,8 @@ console.log('🦈 Starting Empirical Health API...');
 console.log('Port:', PORT);
 console.log('Kimi API Key present:', !!KIMI_API_KEY);
 
-// In-memory storage
+// In-memory storage (user state only, memory is stateless - stored in app)
 const users = new Map();
-const userMemories = new Map(); // userId -> { events: [], insights: [], profile: {} }
 
 // Vicente's persona - The "Acechador" (disciplined hunter) - DEFAULT fallback
 const VICENTE_PERSONA = `You are Vicente, El Tiburón, a disciplined and perceptive health guide.
@@ -184,18 +183,7 @@ const checkAccess = (req, res, next) => {
   next();
 };
 
-// Initialize user memory
-const getUserMemory = (userId) => {
-  if (!userMemories.has(userId)) {
-    userMemories.set(userId, {
-      events: [],
-      insights: [],
-      profile: {},
-      conversationHistory: []
-    });
-  }
-  return userMemories.get(userId);
-};
+
 
 // Health check - Railway needs this!
 app.get('/', (req, res) => {
@@ -267,24 +255,6 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
     user.lastMessageTime.push(now);
     user.messageCount++;
     
-    // Get user's memory
-    const memory = getUserMemory(userId);
-    
-    // Build system prompt with memory
-    const memoryContext = [];
-    
-    if (memory.events.length > 0) {
-      memoryContext.push(`\nIMPORTANT EVENTS I'VE LOGGED:\n${memory.events.slice(-5).map(e => `- ${e.title} (${e.date}): ${e.details}`).join('\n')}`);
-    }
-    
-    if (memory.insights.length > 0) {
-      memoryContext.push(`\nPATTERNS I'VE LEARNED ABOUT YOU:\n${memory.insights.map(i => `- ${i.description}`).join('\n')}`);
-    }
-    
-    if (Object.keys(memory.profile).length > 0) {
-      memoryContext.push(`\nYOUR PREFERENCES:\n${Object.entries(memory.profile).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`);
-    }
-
     // Build persona from goal (single source of truth - backend owns persona)
     const activePersona = buildPersona(goal);
     
@@ -316,7 +286,7 @@ INSULIN ADVICE GUIDELINES:
 ${bootContext ? `=== BOOT MEMORY (LOADED ON STARTUP) ===\n${bootContext}\n=== END BOOT MEMORY ===\n\n` : ''}
 
 Current Health Context:
-${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}${trendLegend}${insulinGuide}
+${JSON.stringify(context || {}, null, 2)}${trendLegend}${insulinGuide}
 
 DATA AVAILABILITY GUIDELINES - ALWAYS CHECK:
 The context includes "dataAvailability" flags. ALWAYS check these before making claims about patterns:
@@ -385,25 +355,16 @@ The chat will stay open so they can continue the conversation.`
     const data = await response.json();
     let reply = data.choices[0]?.message?.content || "I'm having trouble right now."
     
-    // Parse and process memory commands
+    // Parse memory commands - return to app for storage (backend is stateless)
+    const memoryCommands = [];
     const memoryMatches = reply.match(/\[MEMORY:(\w+)\|({.+?})\]/g);
     if (memoryMatches) {
       memoryMatches.forEach(match => {
         const [, action, jsonStr] = match.match(/\[MEMORY:(\w+)\|({.+?})\]/);
         try {
           const data = JSON.parse(jsonStr);
-          
-          if (action === 'logEvent') {
-            memory.events.push({ ...data, date: new Date().toISOString() });
-            console.log(`[Memory] Logged event for ${userId}: ${data.title}`);
-          } else if (action === 'setPreference') {
-            memory.profile[data.key] = data.value;
-            console.log(`[Memory] Set preference for ${userId}: ${data.key} = ${data.value}`);
-          } else if (action === 'addInsight') {
-            memory.insights.push({ ...data, date: new Date().toISOString() });
-            console.log(`[Memory] Added insight for ${userId}: ${data.patternType}`);
-          }
-          
+          memoryCommands.push({ action, data });
+          console.log(`[Memory] Command for app - ${action}:`, data);
           // Remove the memory command from the reply
           reply = reply.replace(match, '');
         } catch (e) {
@@ -436,7 +397,8 @@ The chat will stay open so they can continue the conversation.`
     console.log('Kimi response received');
     res.json({ 
       message: reply,
-      actions: actions.length > 0 ? actions : undefined
+      actions: actions.length > 0 ? actions : undefined,
+      memoryCommands: memoryCommands.length > 0 ? memoryCommands : undefined
     });
     
   } catch (error) {
@@ -448,10 +410,14 @@ The chat will stay open so they can continue the conversation.`
   }
 });
 
-// Get user's memory (for debugging)
+// Get user's memory (deprecated - memory now stored in app)
 app.get('/v1/vicente/memory', requireAuth, (req, res) => {
-  const memory = getUserMemory(req.userId);
-  res.json(memory);
+  res.json({ 
+    note: 'Memory is now stored locally in the app',
+    events: [],
+    insights: [],
+    profile: {}
+  });
 });
 
 // Listen on 0.0.0.0 so Railway can reach it
