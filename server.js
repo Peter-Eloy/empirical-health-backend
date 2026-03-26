@@ -308,7 +308,18 @@ Or for preferences:
 Or for insights:
 [MEMORY:addInsight|{"patternType": "pizza_reaction", "description": "Pizza consistently causes glucose spikes for this user", "confidence": 85}]
 
-Only use [MEMORY:...] when something is truly worth remembering. Most responses won't need it.
+ADVANCED MEMORY (Markdown Sections):
+You can also update the USER.md and MEMORY.md files with rich formatted content. Use this when:
+- User says "/compact" - Summarize what you know into MEMORY section
+- You want to create a rich profile of the user in USER section
+- You have complex patterns to document
+
+Format:
+[SKILL:updateUserSection|{"content": "# USER\\n\\n## Basics\\n- Name: Peter\\n- Goal: Muscle gain\\n\\n## Patterns\\n- Pizza spikes at 3h\\n- Leg day → delayed hypo"}]
+
+[SKILL:updateMemorySection|{"content": "# MEMORY\\n\\n## Active Patterns\\n- High confidence: Post-workout lows (6-8h)\\n- Medium confidence: Fiasp peaks at 45min\\n\\n## Recent Focus\\n- Training: Leg emphasis\\n- Goal: Hypertrophy with T1D management"}]
+
+Only use [MEMORY:...] or [SKILL:...] when something is truly worth remembering. Most responses won't need it.
 
 NAVIGATION ACTIONS:
 When the user asks to see data, charts, or specific screens, you can trigger app navigation using:
@@ -355,8 +366,10 @@ The chat will stay open so they can continue the conversation.`
     const data = await response.json();
     let reply = data.choices[0]?.message?.content || "I'm having trouble right now."
     
-    // Parse memory commands - return to app for storage (backend is stateless)
+    // Parse memory/skill commands - return to app for storage (backend is stateless)
     const memoryCommands = [];
+    
+    // Parse [MEMORY:action|{data}] tags
     const memoryMatches = reply.match(/\[MEMORY:(\w+)\|({.+?})\]/g);
     if (memoryMatches) {
       memoryMatches.forEach(match => {
@@ -365,10 +378,25 @@ The chat will stay open so they can continue the conversation.`
           const data = JSON.parse(jsonStr);
           memoryCommands.push({ action, data });
           console.log(`[Memory] Command for app - ${action}:`, data);
-          // Remove the memory command from the reply
           reply = reply.replace(match, '');
         } catch (e) {
           console.error('[Memory] Failed to parse memory command:', e);
+        }
+      });
+    }
+    
+    // Parse [SKILL:action|{data}] tags (section updates, compaction, etc.)
+    const skillMatches = reply.match(/\[SKILL:(\w+)\|({.+?})\]/g);
+    if (skillMatches) {
+      skillMatches.forEach(match => {
+        const [, action, jsonStr] = match.match(/\[SKILL:(\w+)\|({.+?})\]/);
+        try {
+          const data = JSON.parse(jsonStr);
+          memoryCommands.push({ action, data });
+          console.log(`[Skill] Command for app - ${action}:`, data);
+          reply = reply.replace(match, '');
+        } catch (e) {
+          console.error('[Skill] Failed to parse skill command:', e);
         }
       });
     }
