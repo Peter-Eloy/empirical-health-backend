@@ -1,7 +1,7 @@
 {
   "name": "empirical-health-api",
   "version": "1.0.0",
-  "description": "Backend for Empirical Health - Don Vicente AI",
+  "description": "Backend for OpenD - Don Vicente AI",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

@@ -308,7 +308,12 @@ INSULIN ADVICE GUIDELINES:
 - ${context.insulinProfile.deliveryMethod === 'pump' ? 'Pump user: Basal is continuous, can suspend for lows' : 'Injection user: Basal injected ' + context.insulinProfile.basal.timing}
 - IOB calculation uses ${context.insulinProfile.bolus.durationHours}h for bolus, ${context.insulinProfile.basal.durationHours}h for basal` : '';
     
+    // Boot context from app (like OpenClaw's bootstrap files)
+    const bootContext = context?.bootContext || '';
+    
     const systemPrompt = `${activePersona}
+
+${bootContext ? `=== BOOT MEMORY (LOADED ON STARTUP) ===\n${bootContext}\n=== END BOOT MEMORY ===\n\n` : ''}
 
 Current Health Context:
 ${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}${trendLegend}${insulinGuide}

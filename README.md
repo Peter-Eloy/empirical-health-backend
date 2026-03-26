@@ -1,4 +1,4 @@
-# Empirical Health Backend
+# OpenD Backend
 
 Simple Express.js backend for Don Vicente AI.
 
