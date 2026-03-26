@@ -27,133 +27,434 @@ console.log('Kimi API Key present:', !!KIMI_API_KEY);
 // In-memory storage (user state only, memory is stateless - stored in app)
 const users = new Map();
 
-// Vicente's persona - The "Acechador" (disciplined hunter) - DEFAULT fallback
+// ==========================================
+// KIMI TOOLS DEFINITION (Native tool_calls)
+// ==========================================
+
+const VICENTE_TOOLS = [
+  // ==========================================
+  // MEMORY TOOLS (Store information)
+  // ==========================================
+  {
+    type: "function",
+    function: {
+      name: "logEvent",
+      description: "Log a significant event about the user to memory. Use for food reactions, workouts, goals set, patterns observed, or anything worth remembering.",
+      parameters: {
+        type: "object",
+        required: ["type", "title"],
+        properties: {
+          type: {
+            type: "string",
+            enum: ["food_reaction", "emotion", "glucose_spike", "glucose_crash", "exercise_impact", "sleep_issue", "insulin_dose", "learning", "pattern", "goal", "preference"],
+            description: "Category of the event"
+          },
+          severity: {
+            type: "number",
+            minimum: 1,
+            maximum: 5,
+            description: "Importance: 1=minor, 5=major"
+          },
+          title: {
+            type: "string",
+            description: "Short title of the event"
+          },
+          details: {
+            type: "string",
+            description: "Full description of what happened"
+          },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Tags for categorization (e.g., ['pizza', 'high_carb'])"
+          }
+        }
+      }
+    }
+  },
+  // ==========================================
+  // CALCULATION TOOLS (Math & Analysis)
+  // ==========================================
+  {
+    type: "function",
+    function: {
+      name: "calculateIOB",
+      description: "Calculate Insulin On Board (active insulin) based on doses and time. Use before giving dosing advice or analyzing glucose trends.",
+      parameters: {
+        type: "object",
+        required: ["doses"],
+        properties: {
+          doses: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                units: { type: "number", description: "Insulin units taken" },
+                minutesAgo: { type: "number", description: "Minutes since dose" },
+                type: { type: "string", enum: ["bolus", "basal"], description: "Bolus (fast) or basal (slow)" }
+              }
+            },
+            description: "Array of recent insulin doses"
+          },
+          insulinDuration: {
+            type: "number",
+            default: 4,
+            description: "Insulin duration in hours (Fiasp=4.5, Humalog=4, Tresiba=42)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "analyzeGlucoseTrend",
+      description: "Analyze glucose readings for trends, predictions, and patterns. Use when user asks about patterns or you need statistical analysis.",
+      parameters: {
+        type: "object",
+        required: ["readings"],
+        properties: {
+          readings: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                value: { type: "number", description: "Glucose mg/dL" },
+                timestamp: { type: "string", description: "ISO timestamp" }
+              }
+            },
+            description: "Recent glucose readings (last 3-6 hours)"
+          },
+          currentIOB: {
+            type: "number",
+            description: "Current insulin on board (optional)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "calculateWorkoutNutrition",
+      description: "Calculate pre/during/post workout carb and protein needs for T1D athletes. Use when user plans a workout or asks about fueling.",
+      parameters: {
+        type: "object",
+        required: ["workoutType", "duration", "currentGlucose"],
+        properties: {
+          workoutType: {
+            type: "string",
+            enum: ["strength", "cardio", "hiit", "mixed"],
+            description: "Type of workout"
+          },
+          duration: {
+            type: "number",
+            description: "Duration in minutes"
+          },
+          intensity: {
+            type: "string",
+            enum: ["low", "moderate", "high"],
+            default: "moderate",
+            description: "Workout intensity"
+          },
+          currentGlucose: {
+            type: "number",
+            description: "Current glucose mg/dL"
+          },
+          currentIOB: {
+            type: "number",
+            default: 0,
+            description: "Current insulin on board"
+          },
+          bodyWeight: {
+            type: "number",
+            description: "Body weight in kg (optional, for protein calc)"
+          },
+          goal: {
+            type: "string",
+            enum: ["muscle_gain", "fat_loss", "performance"],
+            default: "performance"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "calculateCorrectionDose",
+      description: "Calculate insulin correction dose based on current glucose, target, and sensitivity. Use when user asks how much insulin to take.",
+      parameters: {
+        type: "object",
+        required: ["currentGlucose", "targetGlucose", "correctionFactor"],
+        properties: {
+          currentGlucose: {
+            type: "number",
+            description: "Current glucose mg/dL"
+          },
+          targetGlucose: {
+            type: "number",
+            default: 100,
+            description: "Target glucose mg/dL"
+          },
+          correctionFactor: {
+            type: "number",
+            description: "mg/dL per 1 unit insulin (e.g., 50 = 1u drops 50 mg/dL)"
+          },
+          currentIOB: {
+            type: "number",
+            default: 0,
+            description: "Current insulin on board"
+          },
+          carbsToEat: {
+            type: "number",
+            default: 0,
+            description: "Carbs about to be consumed (for bolus calc)"
+          },
+          carbRatio: {
+            type: "number",
+            description: "Carbs per 1 unit insulin (e.g., 10 = 1u covers 10g)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "analyzeSleepImpact",
+      description: "Analyze how sleep duration and quality affects glucose patterns. Use when discussing sleep or morning glucose issues.",
+      parameters: {
+        type: "object",
+        required: ["sleepHours", "sleepQuality"],
+        properties: {
+          sleepHours: {
+            type: "number",
+            description: "Hours of sleep"
+          },
+          sleepQuality: {
+            type: "string",
+            enum: ["poor", "fair", "good", "excellent"],
+            description: "Self-reported sleep quality"
+          },
+          morningGlucose: {
+            type: "number",
+            description: "Morning glucose reading (optional)"
+          },
+          last7DaysAvg: {
+            type: "number",
+            description: "Average glucose last 7 days (optional, for comparison)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "predictHypoRisk",
+      description: "Calculate risk of upcoming hypoglycemia based on current trends, IOB, and recent activity. Use for proactive warnings.",
+      parameters: {
+        type: "object",
+        required: ["currentGlucose", "glucoseTrend"],
+        properties: {
+          currentGlucose: {
+            type: "number",
+            description: "Current glucose mg/dL"
+          },
+          glucoseTrend: {
+            type: "string",
+            enum: ["falling_fast", "falling", "stable", "rising", "rising_fast"],
+            description: "Direction of glucose trend"
+          },
+          currentIOB: {
+            type: "number",
+            description: "Insulin on board"
+          },
+          recentExercise: {
+            type: "boolean",
+            description: "Exercise in last 4 hours"
+          },
+          timeSinceLastMeal: {
+            type: "number",
+            description: "Minutes since last meal (optional)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "setPreference",
+      description: "Store a simple user preference or fact. Use for name, goals, dislikes, insulin preferences, etc.",
+      parameters: {
+        type: "object",
+        required: ["key", "value"],
+        properties: {
+          key: {
+            type: "string",
+            description: "Identifier for this preference (e.g., 'name', 'goal', 'dislikes_morning_lows')"
+          },
+          value: {
+            type: "string",
+            description: "The value to remember"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "addInsight",
+      description: "Record a learned pattern or insight about the user with confidence level.",
+      parameters: {
+        type: "object",
+        required: ["patternType", "description", "confidence"],
+        properties: {
+          patternType: {
+            type: "string",
+            description: "Category of pattern (e.g., 'food_reaction_pizza', 'post_workout_low')"
+          },
+          description: {
+            type: "string",
+            description: "Clear description of the pattern"
+          },
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 100,
+            description: "Confidence percentage based on evidence"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "updateUserSection",
+      description: "Update the USER.md memory file with rich markdown content. Use this to create a comprehensive profile of the user including goals, patterns, and personality notes.",
+      parameters: {
+        type: "object",
+        required: ["content"],
+        properties: {
+          content: {
+            type: "string",
+            description: "Full markdown content for the USER section. Include headers, lists, structured information."
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "updateMemorySection",
+      description: "Update the MEMORY.md file with compacted/summarized memories. Use when user requests /compact or when you want to archive old events into a structured summary.",
+      parameters: {
+        type: "object",
+        required: ["content"],
+        properties: {
+          content: {
+            type: "string",
+            description: "Full markdown content for the MEMORY section with patterns, insights, and archived notes."
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "navigate",
+      description: "Navigate the user to a specific screen in the app. Use when user asks to 'show me' something or when suggesting they view specific data.",
+      parameters: {
+        type: "object",
+        required: ["screen"],
+        properties: {
+          screen: {
+            type: "string",
+            enum: ["Dashboard", "GlucoseStats", "GlucoseTrends", "BodyProgress", "WorkoutHistory", "SleepAnalysis", "InsulinSensitivity", "MealLog", "GymLog", "Settings", "VicenteChat"],
+            description: "Screen to navigate to"
+          },
+          params: {
+            type: "object",
+            description: "Optional parameters for the screen"
+          }
+        }
+      }
+    }
+  }
+];
+
+// Vicente's persona - The "Acechador" (disciplined hunter)
 const VICENTE_PERSONA = `You are Vicente, El Tiburón, a disciplined and perceptive health guide.
 
-You approach health like an acechador — one who observes patterns, tracks behavior, and acts with precision. You help the user build awareness, discipline, and control over their body and decisions.
+You approach health like an acechador — one who observes patterns, tracks behavior, and acts with precision.
 
-Your personality traits:
-- Calm, grounded, and intentional — you don't waste words
-- Direct and honest, but never harsh or dismissive
-- You value discipline and consistency, but you understand human variability
-- You guide the user to see clearly rather than blindly follow rules
-- You recognize effort and progress, not just outcomes
-- You know when to push… and when to steady someone
+Personality:
+- Calm, grounded, intentional — you don't waste words
+- Direct and honest, but never harsh
+- Peer-to-peer, never paternal
+- Modern Spanish slang occasionally: "dale", "claro", "fácil", "puro flow"
 
-CRITICAL PRIORITY (NEVER COMPROMISE):
-1. DIABETES SAFETY COMES FIRST - Always warn about dangerous glucose levels (<70 or >250)
-2. Never encourage reckless behavior with insulin or exercise
-3. When in doubt, err on the side of caution
+CRITICAL SAFETY:
+- Diabetes safety FIRST - warn about dangerous glucose (<70 or >250)
+- Never encourage reckless insulin/exercise behavior
+- Err on the side of caution
 
-Your philosophy:
-- The body is a system to understand, not fight — it reflects patterns, not failures
-- Discipline builds freedom, but flexibility sustains it
-- One bad day is data, not defeat
-- Awareness creates choice; choice creates control
-- You don't chase perfection — you refine behavior over time
-- The body is your base — treat it with respect
+You have access to TOOLS to remember things about the user. When they tell you something important (name, goals, food reactions, patterns), use the appropriate tool to store it. The tools are executed on their device and persist across conversations.`;
 
-Your expertise:
-- Type 1 and Type 2 diabetes management
-- Glucose pattern recognition and control strategies
-- Exercise and glucose dynamics
-- Nutrition, carb estimation, and timing
-- Insulin sensitivity and behavioral patterns
-- Sleep, stress, and metabolic impact
-- CGM data interpretation and decision-making
-
-IMPORTANT CONTEXT RULES:
-- ONLY mention training/workouts if there is RECENT workout data (within last 48h) in the context
-- If no recent workouts exist, DO NOT bring up exercise unprompted
-- Time-aware coaching: Don't suggest training at inappropriate times (late night) unless user asks
-- Focus on what's actually happening now, not hypothetical scenarios
-
-Communication style:
-- Concise, clear, and intentional
-- No fluff, but not cold
-- You adjust tone depending on the situation:
-  * When the user is on track → reinforce and sharpen
-  * When they struggle → stabilize, then redirect
-- Occasional short motivational lines when they matter
-- Emojis are rare and purposeful (✅ ⚠️ 📉 📈 💪)
-
-Spanish slang (modern, internet culture, NOT fatherly):
-- Use occasionally: "dale" (let's go), "claro" (of course), "fácil" (easy/relax), "puro flow" (in the flow)
-- Keep it current, cool, peer-to-peer — never paternal
-- Example: "Dale, that meal timing is solid" or "Fácil, we adjust and keep going"
-
-Core directive:
-You are not here to judge or comfort blindly.
-You are here to help the user become consistent, aware, and in control — even on imperfect days.`;
-
-// Goal-specific modifiers - adapt Vicente's coaching based on user's goal
+// Goal-specific modifiers
 const GOAL_MODIFIERS = {
   muscle_gain: `USER GOAL: BUILD MUSCLE & STRENGTH
 
-Additional coaching priorities (after safety):
+Priorities:
 1. Maximize anabolic windows (2-4 hours post-workout)
-2. Protect muscle protein synthesis with proper nutrition timing
-3. Prevent workout-destroying lows while training hard
+2. Protect muscle protein synthesis with nutrition timing
+3. Prevent workout-destroying lows
 4. Watch for delayed lows 6-8 hours after leg day
-5. Celebrate strength PRs as much as glucose wins
-6. Accept that 140-160 glucose post-workout can be acceptable (muscle sponge effect)
+5. Accept 140-160 glucose post-workout (muscle sponge effect)`,
+  
+  maintain_fitness: `USER GOAL: MAINTAIN FITNESS
 
-Tone shift: You understand the iron. You've been in the trenches. Speak to the lifter who happens to have T1D, not the diabetic trying to lift.
-When they hit a PR: "Dale! That's solid work. 💪"
-When glucose is borderline: "Address this first. Then we train hard."
-When discussing gains: "The pump window is real. Don't miss it."`,
+Priorities:
+1. Time-in-range optimization
+2. Balanced exercise and glucose
+3. Recovery and sleep
+4. Stress management`,
+  
+  glucose_focus: `USER GOAL: TIGHT GLUCOSE CONTROL
 
-  maintain_fitness: `USER GOAL: STAY FIT & HEALTHY
-
-Additional coaching priorities (after safety):
-1. Consistency over intensity - sustainable habits
-2. Balanced approach to glucose and fitness
-3. Recovery and sleep optimization
-4. Stress management
-5. Moderate exercise recommendations
-
-Tone shift: Focus on longevity and sustainability. Help them find their rhythm without burning out.
-When they're consistent: "Claro. This is the pace that wins."
-When they miss a day: "One session doesn't break the chain. Back at it tomorrow."`,
-
-  glucose_focus: `USER GOAL: FOCUS ON GLUCOSE CONTROL
-
-Additional coaching priorities (after safety):
-1. Tight control and time-in-range maximization
-2. Pattern recognition and prediction
+Priorities:
+1. Maximize time-in-range
+2. Pattern recognition & prediction
 3. Conservative recommendations
-4. Minimal exercise risk
-
-Tone shift: Sharper focus on data and precision. Every point matters. No room for "close enough."
-When glucose is borderline: "Wait. Fix this first. Everything else follows."
-When they nail a day: "Locked in. That's control."
-When discussing food: "Numbers don't lie. Estimate tight."`
+4. Minimal exercise risk`
 };
 
-/**
- * Build the full Vicente persona based on user goal
- * @param {string} goal - User's goal: 'muscle_gain', 'maintain_fitness', or 'glucose_focus'
- * @returns {string} Full persona with goal modifier
- */
 function buildPersona(goal) {
-  const base = VICENTE_PERSONA;
   const modifier = GOAL_MODIFIERS[goal] || GOAL_MODIFIERS.maintain_fitness;
-  return base + '\n\n' + modifier;
+  return `${VICENTE_PERSONA}\n\n${modifier}`;
 }
 
-// Simple auth middleware
+// ==========================================
+// AUTH & USER MANAGEMENT
+// ==========================================
+
 const requireAuth = (req, res, next) => {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   
-  const token = auth.replace('Bearer ', '');
+  const token = auth.slice(7);
   req.userId = token;
   next();
 };
 
-// Check trial/subscription
 const checkAccess = (req, res, next) => {
   const userId = req.userId;
   
@@ -162,199 +463,452 @@ const checkAccess = (req, res, next) => {
       installDate: new Date(),
       isSubscribed: false,
       messageCount: 0,
+      lastMessageTime: []
     });
   }
   
   const user = users.get(userId);
-  const trialDays = 2;
-  const installDate = new Date(user.installDate);
-  const trialEnd = new Date(installDate);
-  trialEnd.setDate(trialEnd.getDate() + trialDays);
+  req.user = user;
   
-  const now = new Date();
-  const isTrialActive = now < trialEnd;
+  // Check trial period (48 hours)
+  const hoursSinceInstall = (Date.now() - user.installDate) / (1000 * 60 * 60);
+  const isTrialActive = hoursSinceInstall < 48;
   
   if (!isTrialActive && !user.isSubscribed) {
-    return res.status(403).json({ error: 'Subscription required' });
+    return res.status(403).json({ 
+      error: 'Subscription required',
+      message: 'Trial expired. Please subscribe to continue.'
+    });
   }
   
-  req.user = user;
-  req.isTrial = isTrialActive;
+  // Rate limiting (20 messages per minute)
+  const now = Date.now();
+  if (!user.lastMessageTime) user.lastMessageTime = [];
+  user.lastMessageTime = user.lastMessageTime.filter(t => now - t < 60000);
+  
+  if (user.lastMessageTime.length > 20) {
+    return res.status(429).json({ error: 'Rate limit exceeded' });
+  }
+  user.lastMessageTime.push(now);
+  user.messageCount++;
+  
   next();
 };
 
+// ==========================================
+// HEALTH CHECK
+// ==========================================
 
-
-// Health check - Railway needs this!
 app.get('/', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'Empirical Health API',
-    version: '1.0.0',
-    kimiConfigured: !!KIMI_API_KEY
+    version: '1.1.0',
+    kimiConfigured: !!KIMI_API_KEY,
+    features: ['tool_calls', 'stateless_memory', 'boot_context']
   });
 });
 
-// Health check endpoint for Railway
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' });
-});
+// ==========================================
+// CALCULATION FUNCTIONS (Executed when Kimi calls tools)
+// ==========================================
 
-// Get trial status
-app.get('/v1/user/trial', requireAuth, (req, res) => {
-  const userId = req.userId;
+function calculateIOB(doses, insulinDuration = 4) {
+  let iob = 0;
+  const now = Date.now();
   
-  if (!users.has(userId)) {
-    return res.json({ isTrial: true, daysLeft: 2 });
+  for (const dose of doses) {
+    const hoursAgo = dose.minutesAgo / 60;
+    const percentRemaining = Math.max(0, 1 - (hoursAgo / insulinDuration));
+    // Exponential decay curve for insulin activity
+    const activityCurve = Math.pow(percentRemaining, 2);
+    iob += dose.units * activityCurve;
   }
   
-  const user = users.get(userId);
-  const installDate = new Date(user.installDate);
-  const trialEnd = new Date(installDate);
-  trialEnd.setDate(trialEnd.getDate() + 2);
-  
-  const now = new Date();
-  const daysLeft = Math.max(0, Math.ceil((trialEnd - now) / (1000 * 60 * 60 * 24)));
-  
-  res.json({
-    isTrial: now < trialEnd,
-    daysLeft,
-    isSubscribed: user.isSubscribed,
-  });
-});
+  return {
+    iob: Math.round(iob * 100) / 100,
+    iobUnits: Math.round(iob * 10) / 10,
+    explanation: `${iob.toFixed(1)} units still active from ${doses.length} recent doses`,
+    peakActivity: "45-90 minutes post-injection",
+    zeroTime: `${insulinDuration} hours`
+  };
+}
 
-// Main chat endpoint with memory context
+function analyzeGlucoseTrend(readings, currentIOB = 0) {
+  if (readings.length < 2) {
+    return { error: "Need at least 2 readings for trend analysis" };
+  }
+  
+  // Sort by timestamp
+  const sorted = [...readings].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  
+  // Calculate rate of change (mg/dL per hour)
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const hoursDiff = (new Date(last.timestamp) - new Date(first.timestamp)) / (1000 * 60 * 60);
+  const mgDlChange = last.value - first.value;
+  const ratePerHour = hoursDiff > 0 ? mgDlChange / hoursDiff : 0;
+  
+  // Determine trend direction
+  let trend = "stable";
+  let trendArrow = "→";
+  if (ratePerHour > 60) { trend = "rising_fast"; trendArrow = "↑↑"; }
+  else if (ratePerHour > 30) { trend = "rising"; trendArrow = "↑"; }
+  else if (ratePerHour > 10) { trend = "rising_slowly"; trendArrow = "↗"; }
+  else if (ratePerHour < -60) { trend = "falling_fast"; trendArrow = "↓↓"; }
+  else if (ratePerHour < -30) { trend = "falling"; trendArrow = "↓"; }
+  else if (ratePerHour < -10) { trend = "falling_slowly"; trendArrow = "↘"; }
+  
+  // Calculate predicted glucose in 30 min
+  const predicted30min = last.value + (ratePerHour * 0.5);
+  
+  // Calculate time to target (100 mg/dL)
+  const timeToTarget = ratePerHour !== 0 
+    ? (100 - last.value) / ratePerHour 
+    : null;
+  
+  // Calculate time to hypo (<70)
+  const timeToHypo = ratePerHour < 0
+    ? (70 - last.value) / ratePerHour
+    : null;
+  
+  // Statistics
+  const values = sorted.map(r => r.value);
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const stdDev = Math.sqrt(values.reduce((sq, n) => sq + Math.pow(n - avg, 2), 0) / values.length);
+  
+  return {
+    current: last.value,
+    trend,
+    trendArrow,
+    ratePerHour: Math.round(ratePerHour),
+    predicted30min: Math.round(predicted30min),
+    timeToTarget: timeToTarget ? Math.round(timeToTarget * 60) : null, // minutes
+    timeToHypo: timeToHypo && timeToHypo > 0 ? Math.round(timeToHypo * 60) : null, // minutes
+    volatility: stdDev > 30 ? "high" : stdDev > 15 ? "moderate" : "low",
+    statistics: {
+      average: Math.round(avg),
+      min,
+      max,
+      readings: values.length
+    },
+    iobImpact: currentIOB > 2 ? "significant downward pressure" : 
+               currentIOB > 0.5 ? "moderate downward pressure" : 
+               "minimal insulin activity"
+  };
+}
+
+function calculateWorkoutNutrition(params) {
+  const { workoutType, duration, intensity, currentGlucose, currentIOB = 0, bodyWeight = 70, goal = "performance" } = params;
+  
+  // Base carb needs per hour based on intensity and type
+  const carbRates = {
+    strength: { low: 15, moderate: 30, high: 45 },
+    cardio: { low: 30, moderate: 60, high: 90 },
+    hiit: { low: 20, moderate: 40, high: 60 },
+    mixed: { low: 25, moderate: 45, high: 70 }
+  };
+  
+  const carbRate = carbRates[workoutType]?.[intensity] || 30;
+  const totalCarbsNeeded = Math.round((carbRate * duration) / 60);
+  
+  // Protein needs (post-workout)
+  const proteinNeeds = goal === "muscle_gain" 
+    ? Math.round(bodyWeight * 0.4)  // 0.4g per kg for hypertrophy
+    : Math.round(bodyWeight * 0.25); // 0.25g per kg for maintenance
+  
+  // Glucose-based adjustments
+  let preWorkoutCarbs = 0;
+  let recommendation = "";
+  
+  if (currentGlucose < 100) {
+    preWorkoutCarbs = 15;
+    recommendation = "Start with 15g fast carbs (glucose tabs/juice) before workout";
+  } else if (currentGlucose < 150) {
+    preWorkoutCarbs = 0;
+    recommendation = "Glucose is good. Have fast carbs available just in case.";
+  } else if (currentGlucose > 250) {
+    recommendation = "Glucose too high. Consider correcting first or lightening intensity.";
+  }
+  
+  // IOB adjustment
+  const iobAdjustment = currentIOB > 3 ? "Reduce intensity - high IOB may cause drop" :
+                        currentIOB > 1.5 ? "Monitor closely - moderate IOB" :
+                        "Good - minimal insulin activity";
+  
+  // Timing
+  const preWorkoutTime = workoutType === "strength" ? "60-90 min before" : "30-60 min before";
+  const postWorkoutWindow = "Within 30-60 minutes post-workout";
+  
+  return {
+    preWorkout: {
+      carbs: preWorkoutCarbs,
+      timing: preWorkoutTime,
+      type: "Fast-acting (glucose, juice, dates)"
+    },
+    duringWorkout: {
+      carbsPerHour: carbRate,
+      totalDuration: duration,
+      strategy: duration > 60 ? "Consume carbs every 20-30 min" : "Have carbs available"
+    },
+    postWorkout: {
+      protein: proteinNeeds,
+      carbs: Math.round(totalCarbsNeeded * 0.5), // 50% of burned carbs
+      timing: postWorkoutWindow,
+      explanation: goal === "muscle_gain" 
+        ? "Anabolic window: prioritize protein + some carbs" 
+        : "Recovery: balanced nutrition"
+    },
+    glucoseRecommendation: recommendation,
+    iobWarning: iobAdjustment,
+    totalEnergyExpenditure: Math.round(duration * (intensity === "high" ? 10 : intensity === "moderate" ? 7 : 4))
+  };
+}
+
+function calculateCorrectionDose(params) {
+  const { currentGlucose, targetGlucose = 100, correctionFactor, currentIOB = 0, carbsToEat = 0, carbRatio } = params;
+  
+  // Calculate correction
+  const correctionNeeded = (currentGlucose - targetGlucose) / correctionFactor;
+  
+  // Calculate food bolus if applicable
+  const foodBolus = carbsToEat > 0 && carbRatio ? carbsToEat / carbRatio : 0;
+  
+  // Subtract IOB
+  const totalDose = Math.max(0, correctionNeeded + foodBolus - currentIOB);
+  
+  // Round to nearest 0.5
+  const roundedDose = Math.round(totalDose * 2) / 2;
+  
+  // Safety checks
+  const warnings = [];
+  if (currentGlucose < 70) warnings.push("LOW GLUCOSE - Do NOT take insulin. Treat hypo first.");
+  if (currentIOB > 3) warnings.push(`High IOB (${currentIOB}u) - consider waiting or reducing dose`);
+  if (roundedDose > 10) warnings.push("Large dose - verify calculations and consider splitting");
+  
+  return {
+    totalDose: roundedDose,
+    breakdown: {
+      correction: Math.round(correctionNeeded * 10) / 10,
+      foodBolus: Math.round(foodBolus * 10) / 10,
+      iobSubtraction: Math.round(currentIOB * 10) / 10,
+      netDose: roundedDose
+    },
+    expectedDrop: Math.round(roundedDose * correctionFactor),
+    targetRange: `${targetGlucose - 20} - ${targetGlucose + 20}`,
+    warnings,
+    timing: "Take now" + (foodBolus > 0 ? " with meal" : ""),
+    recheck: "Check glucose in 2 hours"
+  };
+}
+
+function analyzeSleepImpact(params) {
+  const { sleepHours, sleepQuality, morningGlucose, last7DaysAvg } = params;
+  
+  // Sleep quality score (0-100)
+  const durationScore = Math.min(100, (sleepHours / 8) * 100);
+  const qualityMultiplier = { poor: 0.5, fair: 0.75, good: 1.0, excellent: 1.1 }[sleepQuality] || 0.75;
+  const sleepScore = Math.round(durationScore * qualityMultiplier);
+  
+  // Impact on glucose
+  let glucoseImpact = "neutral";
+  let explanation = "";
+  
+  if (sleepHours < 6 || sleepQuality === "poor") {
+    glucoseImpact = "negative";
+    explanation = "Poor sleep increases insulin resistance and dawn phenomenon";
+  } else if (sleepHours > 9 && sleepQuality === "excellent") {
+    glucoseImpact = "positive";
+    explanation = "Good recovery sleep improves insulin sensitivity";
+  }
+  
+  // Morning glucose analysis
+  let morningAnalysis = null;
+  if (morningGlucose && last7DaysAvg) {
+    const diff = morningGlucose - last7DaysAvg;
+    if (diff > 30) {
+      morningAnalysis = `Morning glucose ${diff}mg/dL higher than average - likely sleep-related stress response`;
+    } else if (diff < -30) {
+      morningAnalysis = `Morning glucose ${Math.abs(diff)}mg/dL lower than average - check for overnight lows`;
+    }
+  }
+  
+  // Recommendations
+  const recommendations = [];
+  if (sleepHours < 7) recommendations.push("Aim for 7-9 hours sleep for better glucose control");
+  if (sleepQuality === "poor") recommendations.push("Consider sleep hygiene: no screens 1h before bed, cool room");
+  if (glucoseImpact === "negative") recommendations.push("Be conservative with insulin today - you may be more resistant");
+  
+  return {
+    sleepScore,
+    sleepQuality: sleepQuality,
+    duration: sleepHours,
+    glucoseImpact,
+    explanation,
+    morningAnalysis,
+    recommendations,
+    dawnPhenomenonRisk: sleepHours < 6 ? "high" : sleepHours < 7 ? "moderate" : "low"
+  };
+}
+
+function predictHypoRisk(params) {
+  const { currentGlucose, glucoseTrend, currentIOB, recentExercise, timeSinceLastMeal } = params;
+  
+  // Risk scoring (0-100)
+  let riskScore = 0;
+  const factors = [];
+  
+  // Glucose level
+  if (currentGlucose < 70) { riskScore += 100; factors.push("Already hypo"); }
+  else if (currentGlucose < 90) { riskScore += 40; factors.push("Low glucose"); }
+  else if (currentGlucose < 120) { riskScore += 20; factors.push("Borderline low"); }
+  
+  // Trend
+  if (glucoseTrend === "falling_fast") { riskScore += 35; factors.push("Rapidly falling"); }
+  else if (glucoseTrend === "falling") { riskScore += 25; factors.push("Falling"); }
+  else if (glucoseTrend === "stable" && currentIOB > 2) { riskScore += 15; factors.push("Stable but high IOB"); }
+  
+  // IOB
+  if (currentIOB > 5) { riskScore += 30; factors.push("Very high IOB"); }
+  else if (currentIOB > 3) { riskScore += 20; factors.push("High IOB"); }
+  else if (currentIOB > 1.5) { riskScore += 10; factors.push("Moderate IOB"); }
+  
+  // Exercise
+  if (recentExercise) { riskScore += 15; factors.push("Recent exercise"); }
+  
+  // Time since meal
+  if (timeSinceLastMeal > 180) { riskScore += 10; factors.push("3+ hours since meal"); }
+  
+  // Determine risk level
+  let riskLevel = "low";
+  if (riskScore >= 80) riskLevel = "critical";
+  else if (riskScore >= 60) riskLevel = "high";
+  else if (riskScore >= 40) riskLevel = "moderate";
+  else if (riskScore >= 20) riskLevel = "low-moderate";
+  
+  // Time to hypo estimate
+  const timeToHypo = (() => {
+    if (currentGlucose < 70) return 0;
+    if (!["falling", "falling_fast"].includes(glucoseTrend)) return null;
+    const dropRate = glucoseTrend === "falling_fast" ? 3 : 1.5; // mg/dL per min
+    return Math.round((currentGlucose - 70) / dropRate);
+  })();
+  
+  // Action recommendations
+  const actions = [];
+ if (riskLevel === "critical") {
+    actions.push("Treat NOW - 15g fast carbs");
+    actions.push("Do not exercise");
+    actions.push("Recheck in 15 min");
+  } else if (riskLevel === "high") {
+    actions.push("Have 15g carbs ready");
+    actions.push("Avoid strenuous activity");
+    actions.push("Monitor every 10-15 min");
+  } else if (riskLevel === "moderate") {
+    actions.push("Keep carbs accessible");
+    actions.push("Check glucose in 30 min");
+  }
+  
+  return {
+    riskLevel,
+    riskScore: Math.min(100, riskScore),
+    factors,
+    timeToHypoMinutes: timeToHypo,
+    actions,
+    currentGlucose,
+    recommendation: riskLevel === "critical" ? "URGENT: Treat hypoglycemia now" :
+                   riskLevel === "high" ? "Caution: High risk of hypo" :
+                   riskLevel === "moderate" ? "Monitor: Be prepared" :
+                   "Stable: Low immediate risk"
+  };
+}
+
+// ==========================================
+// VICENTE CHAT WITH NATIVE TOOL CALLS
+// ==========================================
+
 app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
   console.log('Received chat request from:', req.userId);
   
   try {
-    // Note: 'persona' param deprecated - now built from goal on backend
     const { message, context, goal } = req.body;
-    const user = req.user;
-    const userId = req.userId;
     
     if (!message) {
       return res.status(400).json({ error: 'Message required' });
     }
     
     if (!KIMI_API_KEY) {
-      return res.status(500).json({ 
-        error: 'API not configured',
-        message: "AI service not configured. Please try again later! 🦈"
-      });
+      return res.status(500).json({ error: 'Kimi API not configured' });
     }
     
-    // Rate limiting: 20 messages per minute per user
-    const now = Date.now();
-    if (!user.lastMessageTime) user.lastMessageTime = [];
-    user.lastMessageTime = user.lastMessageTime.filter(t => now - t < 60000);
+    // Build system prompt
+    const activePersona = buildPersona(goal || 'maintain_fitness');
+    const bootContext = context?.bootContext || '';
     
-    if (user.lastMessageTime.length > 20) {
-      return res.status(429).json({ error: 'Rate limit exceeded' });
-    }
-    user.lastMessageTime.push(now);
-    user.messageCount++;
-    
-    // Build persona from goal (single source of truth - backend owns persona)
-    const activePersona = buildPersona(goal);
-    
-    // Add trend arrow legend if glucose data exists
+    // Trend legend for CGM
     const trendLegend = context?.currentGlucose?.trend ? `
 TREND ARROW LEGEND (LibreView CGM):
 1 = ↓ (falling fast)  |  2 = ↘ (falling slowly)  |  3 = → (flat/stable)
 4 = ↗ (rising slowly) |  5 = ↑ (rising)          |  6 = ↑↑ (rising fast)` : '';
     
-    // Add insulin profile guidance if available
+    // Insulin guide
     const insulinGuide = context?.insulinProfile ? `
 USER'S INSULIN PROFILE:
 Delivery: ${context.insulinProfile.deliveryMethod}
-Bolus: ${context.insulinProfile.bolus.name} (${context.insulinProfile.bolus.brands.join('/')}) - ${context.insulinProfile.bolus.durationHours}h duration
-Basal: ${context.insulinProfile.basal.name} (${context.insulinProfile.basal.brands.join('/')}) - ${context.insulinProfile.basal.durationHours}h ${context.insulinProfile.basal.peakInfo}
-Timing: ${context.insulinProfile.basal.timing}
-
-INSULIN ADVICE GUIDELINES:
-- Bolus insulin (${context.insulinProfile.bolus.durationHours}h active): Used for meal corrections, pre-bolus timing critical
-- Basal insulin: Background coverage, ${context.insulinProfile.basal.name === 'Ultra-Long Basal' ? 'ultra-stable, minimal peak' : 'some peak effect'}
-- ${context.insulinProfile.deliveryMethod === 'pump' ? 'Pump user: Basal is continuous, can suspend for lows' : 'Injection user: Basal injected ' + context.insulinProfile.basal.timing}
-- IOB calculation uses ${context.insulinProfile.bolus.durationHours}h for bolus, ${context.insulinProfile.basal.durationHours}h for basal` : '';
-    
-    // Boot context from app (like OpenClaw's bootstrap files)
-    const bootContext = context?.bootContext || '';
+Bolus: ${context.insulinProfile.bolus.name} - ${context.insulinProfile.bolus.durationHours}h duration
+Basal: ${context.insulinProfile.basal.name} - ${context.insulinProfile.basal.durationHours}h ${context.insulinProfile.basal.peakInfo}
+Timing: ${context.insulinProfile.basal.timing}` : '';
     
     const systemPrompt = `${activePersona}
 
-${bootContext ? `=== BOOT MEMORY (LOADED ON STARTUP) ===\n${bootContext}\n=== END BOOT MEMORY ===\n\n` : ''}
+${bootContext ? `=== BOOT MEMORY ===\n${bootContext}\n=== END BOOT MEMORY ===\n\n` : ''}
 
 Current Health Context:
 ${JSON.stringify(context || {}, null, 2)}${trendLegend}${insulinGuide}
 
-DATA AVAILABILITY GUIDELINES - ALWAYS CHECK:
-The context includes "dataAvailability" flags. ALWAYS check these before making claims about patterns:
-- "enoughDataForPatterns" = true: You have ~1h of data, can make short-term observations
-- "readingsCount24h" < 12: NOT enough data for meaningful analysis - be honest about this
-- "has7dData" = false: Don't claim weekly patterns exist
-- "hasRecentMeals" = false: Don't reference recent meals in advice
+DATA AVAILABILITY:
+Check "dataAvailability" flags in context before making claims. Be honest when data is insufficient.
 
-CRITICAL: If dataAvailability says there's not enough data, SAY SO. Don't hallucinate patterns.
-Example: "I only see 3 readings from the last hour - not enough to spot patterns yet. Give it a few more hours of data."
+INSTRUCTIONS:
+- You are Vicente, a diabetes health companion
+- Use tools to remember important things about the user
+- Call multiple tools at once if needed (parallel)
+- Only use tools when truly necessary
+- Be concise, intentional, grounded`;
 
-You can REMEMBER things about this user. When they tell you something important (food reactions, stress events, preferences, goals), respond with a message and include what you want to remember in this EXACT format at the END of your message:
-
-[MEMORY:logEvent|{"type": "food_reaction", "severity": 4, "title": "Pizza spike", "details": "User ate pizza and spiked to 250", "tags": ["pizza", "high_carb"]}]
-
-Or for preferences:
-[MEMORY:setPreference|{"key": "favorite_food", "value": "tacos"}]
-
-Or for insights:
-[MEMORY:addInsight|{"patternType": "pizza_reaction", "description": "Pizza consistently causes glucose spikes for this user", "confidence": 85}]
-
-ADVANCED MEMORY (Markdown Sections):
-You can also update the USER.md and MEMORY.md files with rich formatted content. Use this when:
-- User says "/compact" - Summarize what you know into MEMORY section
-- You want to create a rich profile of the user in USER section
-- You have complex patterns to document
-
-Format:
-[SKILL:updateUserSection|{"content": "# USER\\n\\n## Basics\\n- Name: Peter\\n- Goal: Muscle gain\\n\\n## Patterns\\n- Pizza spikes at 3h\\n- Leg day → delayed hypo"}]
-
-[SKILL:updateMemorySection|{"content": "# MEMORY\\n\\n## Active Patterns\\n- High confidence: Post-workout lows (6-8h)\\n- Medium confidence: Fiasp peaks at 45min\\n\\n## Recent Focus\\n- Training: Leg emphasis\\n- Goal: Hypertrophy with T1D management"}]
-
-Only use [MEMORY:...] or [SKILL:...] when something is truly worth remembering. Most responses won't need it.
-
-NAVIGATION ACTIONS:
-When the user asks to see data, charts, or specific screens, you can trigger app navigation using:
-[ACTION:navigate|{"screen": "GlucoseStats"}]
-[ACTION:navigate|{"screen": "GlucoseTrends", "params": {"days": 7}}]
-[ACTION:navigate|{"screen": "BodyProgress"}]
-[ACTION:navigate|{"screen": "WorkoutHistory"}]
-[ACTION:navigate|{"screen": "SleepAnalysis"}]
-[ACTION:navigate|{"screen": "InsulinSensitivity"}]
-
-Available screens: Dashboard, GlucoseStats, GlucoseTrends, BodyProgress, WorkoutHistory, SleepAnalysis, InsulinSensitivity, MealLog, GymLog, Settings
-
-Use navigation actions when:
-- User asks to "show me" or "take me to" a screen
-- User wants to see charts or visual data
-- You want to direct them to a specific feature after advice
-
-The chat will stay open so they can continue the conversation.`
+    // Build messages array
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: message }
+    ];
     
-    // Call Kimi API
-    const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
+    // Add image if provided
+    if (req.body.image) {
+      messages[1].content = [
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${req.body.image}` } },
+        { type: 'text', text: message }
+      ];
+    }
+    
+    console.log('Calling Kimi API with tools...');
+    
+    // Call Kimi API with tools
+    const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${KIMI_API_KEY}`,
+        'Authorization': `Bearer ${KIMI_API_KEY}`
       },
       body: JSON.stringify({
-        model: 'kimi-k2-0905-preview',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: message },
-        ],
+        model: 'kimi-k2.5',
+        messages: messages,
+        tools: VICENTE_TOOLS,
+        tool_choice: 'auto',  // Let Kimi decide when to use tools
         temperature: 0.7,
-        max_tokens: 500,
-      }),
+        max_tokens: 2000
+      })
     });
     
     if (!response.ok) {
@@ -364,69 +918,96 @@ The chat will stay open so they can continue the conversation.`
     }
     
     const data = await response.json();
-    let reply = data.choices[0]?.message?.content || "I'm having trouble right now."
+    const choice = data.choices[0];
+    const finishReason = choice.finish_reason;
+    const replyMessage = choice.message;
     
-    // Parse memory/skill commands - return to app for storage (backend is stateless)
-    const memoryCommands = [];
+    console.log('Kimi response:', { finishReason, hasTools: !!replyMessage.tool_calls });
     
-    // Parse [MEMORY:action|{data}] tags
-    const memoryMatches = reply.match(/\[MEMORY:(\w+)\|({.+?})\]/g);
-    if (memoryMatches) {
-      memoryMatches.forEach(match => {
-        const [, action, jsonStr] = match.match(/\[MEMORY:(\w+)\|({.+?})\]/);
-        try {
-          const data = JSON.parse(jsonStr);
-          memoryCommands.push({ action, data });
-          console.log(`[Memory] Command for app - ${action}:`, data);
-          reply = reply.replace(match, '');
-        } catch (e) {
-          console.error('[Memory] Failed to parse memory command:', e);
-        }
-      });
-    }
-    
-    // Parse [SKILL:action|{data}] tags (section updates, compaction, etc.)
-    const skillMatches = reply.match(/\[SKILL:(\w+)\|({.+?})\]/g);
-    if (skillMatches) {
-      skillMatches.forEach(match => {
-        const [, action, jsonStr] = match.match(/\[SKILL:(\w+)\|({.+?})\]/);
-        try {
-          const data = JSON.parse(jsonStr);
-          memoryCommands.push({ action, data });
-          console.log(`[Skill] Command for app - ${action}:`, data);
-          reply = reply.replace(match, '');
-        } catch (e) {
-          console.error('[Skill] Failed to parse skill command:', e);
-        }
-      });
-    }
-    
-    // Parse ACTION commands (navigation, etc.)
+    // Execute tool calls
+    const toolCalls = [];
+    const toolResults = [];
     const actions = [];
-    const actionMatches = reply.match(/\[ACTION:(\w+)\|({.+?})\]/g);
-    if (actionMatches) {
-      actionMatches.forEach(match => {
-        const [, actionType, jsonStr] = match.match(/\[ACTION:(\w+)\|({.+?})\]/);
+    
+    if (finishReason === 'tool_calls' && replyMessage.tool_calls) {
+      for (const toolCall of replyMessage.tool_calls) {
+        const functionName = toolCall.function.name;
+        const args = JSON.parse(toolCall.function.arguments);
+        
+        console.log(`[Tool] ${functionName}:`, args);
+        
+        // Execute calculation tools
+        let result = null;
         try {
-          const data = JSON.parse(jsonStr);
-          actions.push({ type: actionType, ...data });
-          console.log(`[Action] ${actionType} for ${userId}:`, data);
-          // Remove the action command from the reply
-          reply = reply.replace(match, '');
+          switch (functionName) {
+            case 'calculateIOB':
+              result = calculateIOB(args.doses, args.insulinDuration);
+              break;
+            case 'analyzeGlucoseTrend':
+              result = analyzeGlucoseTrend(args.readings, args.currentIOB);
+              break;
+            case 'calculateWorkoutNutrition':
+              result = calculateWorkoutNutrition(args);
+              break;
+            case 'calculateCorrectionDose':
+              result = calculateCorrectionDose(args);
+              break;
+            case 'analyzeSleepImpact':
+              result = analyzeSleepImpact(args);
+              break;
+            case 'predictHypoRisk':
+              result = predictHypoRisk(args);
+              break;
+          }
         } catch (e) {
-          console.error('[Action] Failed to parse action command:', e);
+          console.error(`[Tool] Error executing ${functionName}:`, e);
+          result = { error: e.message };
         }
-      });
+        
+        // Categorize tool calls
+        if (functionName === 'navigate') {
+          actions.push({ type: 'navigate', ...args });
+        } else if (['calculateIOB', 'analyzeGlucoseTrend', 'calculateWorkoutNutrition', 
+                     'calculateCorrectionDose', 'analyzeSleepImpact', 'predictHypoRisk'].includes(functionName)) {
+          // Calculation tools - include results
+          toolResults.push({
+            id: toolCall.id,
+            name: functionName,
+            arguments: args,
+            result: result
+          });
+        } else {
+          // Memory tools - for app to execute
+          toolCalls.push({
+            id: toolCall.id,
+            name: functionName,
+            arguments: args
+          });
+        }
+      }
     }
     
-    // Clean up the reply
-    reply = reply.trim();
+    // Get text content
+    let replyText = replyMessage.content || '';
     
-    console.log('Kimi response received');
-    res.json({ 
-      message: reply,
+    // If only memory tool calls with no text, generate acknowledgment
+    if (!replyText.trim() && toolCalls.length > 0 && toolResults.length === 0) {
+      replyText = `Got it. I'm noting that down.`;
+    }
+    
+    console.log('Sending response to app:', { 
+      textLength: replyText.length, 
+      toolCalls: toolCalls.length, 
+      toolResults: toolResults.length,
+      actions: actions.length 
+    });
+    
+    res.json({
+      message: replyText,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
       actions: actions.length > 0 ? actions : undefined,
-      memoryCommands: memoryCommands.length > 0 ? memoryCommands : undefined
+      finishReason: finishReason
     });
     
   } catch (error) {
@@ -438,17 +1019,55 @@ The chat will stay open so they can continue the conversation.`
   }
 });
 
-// Get user's memory (deprecated - memory now stored in app)
-app.get('/v1/vicente/memory', requireAuth, (req, res) => {
-  res.json({ 
-    note: 'Memory is now stored locally in the app',
-    events: [],
-    insights: [],
-    profile: {}
+// ==========================================
+// SUBSCRIPTION ENDPOINTS
+// ==========================================
+
+app.get('/v1/user/trial', requireAuth, (req, res) => {
+  const userId = req.userId;
+  
+  if (!users.has(userId)) {
+    return res.json({ isTrial: true, daysLeft: 2 });
+  }
+  
+  const user = users.get(userId);
+  const hoursSinceInstall = (Date.now() - user.installDate) / (1000 * 60 * 60);
+  const isTrialActive = hoursSinceInstall < 48;
+  
+  res.json({
+    isTrial: isTrialActive,
+    hoursLeft: isTrialActive ? Math.max(0, 48 - hoursSinceInstall) : 0,
+    isSubscribed: user.isSubscribed,
+    messageCount: user.messageCount
   });
 });
 
-// Listen on 0.0.0.0 so Railway can reach it
+app.get('/v1/user/subscription', requireAuth, (req, res) => {
+  const user = users.get(req.userId);
+  res.json({
+    isSubscribed: user?.isSubscribed || false,
+    trialExpired: !user?.isSubscribed && (Date.now() - user?.installDate) > 48 * 60 * 60 * 1000
+  });
+});
+
+// ==========================================
+// MEMORY DEBUG (stateless - returns empty)
+// ==========================================
+
+app.get('/v1/vicente/memory', requireAuth, (req, res) => {
+  res.json({ 
+    note: 'Memory is stored locally in the app via SQLite',
+    toolCallsSupported: true,
+    sections: ['USER', 'MEMORY', 'events', 'insights', 'preferences']
+  });
+});
+
+// ==========================================
+// START SERVER
+// ==========================================
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🦈 Server running on port ${PORT}`);
+  console.log('✅ Native tool_calls enabled');
+  console.log('Tools:', VICENTE_TOOLS.map(t => t.function.name).join(', '));
 });
