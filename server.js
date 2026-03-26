@@ -323,7 +323,25 @@ Or for preferences:
 Or for insights:
 [MEMORY:addInsight|{"patternType": "pizza_reaction", "description": "Pizza consistently causes glucose spikes for this user", "confidence": 85}]
 
-Only use [MEMORY:...] when something is truly worth remembering. Most responses won't need it.`;
+Only use [MEMORY:...] when something is truly worth remembering. Most responses won't need it.
+
+NAVIGATION ACTIONS:
+When the user asks to see data, charts, or specific screens, you can trigger app navigation using:
+[ACTION:navigate|{"screen": "GlucoseStats"}]
+[ACTION:navigate|{"screen": "GlucoseTrends", "params": {"days": 7}}]
+[ACTION:navigate|{"screen": "BodyProgress"}]
+[ACTION:navigate|{"screen": "WorkoutHistory"}]
+[ACTION:navigate|{"screen": "SleepAnalysis"}]
+[ACTION:navigate|{"screen": "InsulinSensitivity"}]
+
+Available screens: Dashboard, GlucoseStats, GlucoseTrends, BodyProgress, WorkoutHistory, SleepAnalysis, InsulinSensitivity, MealLog, GymLog, Settings
+
+Use navigation actions when:
+- User asks to "show me" or "take me to" a screen
+- User wants to see charts or visual data
+- You want to direct them to a specific feature after advice
+
+The chat will stay open so they can continue the conversation.`
     
     // Call Kimi API
     const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
@@ -379,11 +397,32 @@ Only use [MEMORY:...] when something is truly worth remembering. Most responses 
       });
     }
     
+    // Parse ACTION commands (navigation, etc.)
+    const actions = [];
+    const actionMatches = reply.match(/\[ACTION:(\w+)\|({.+?})\]/g);
+    if (actionMatches) {
+      actionMatches.forEach(match => {
+        const [, actionType, jsonStr] = match.match(/\[ACTION:(\w+)\|({.+?})\]/);
+        try {
+          const data = JSON.parse(jsonStr);
+          actions.push({ type: actionType, ...data });
+          console.log(`[Action] ${actionType} for ${userId}:`, data);
+          // Remove the action command from the reply
+          reply = reply.replace(match, '');
+        } catch (e) {
+          console.error('[Action] Failed to parse action command:', e);
+        }
+      });
+    }
+    
     // Clean up the reply
     reply = reply.trim();
     
     console.log('Kimi response received');
-    res.json({ message: reply });
+    res.json({ 
+      message: reply,
+      actions: actions.length > 0 ? actions : undefined
+    });
     
   } catch (error) {
     console.error('Chat error:', error.message);
