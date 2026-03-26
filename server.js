@@ -311,7 +311,7 @@ INSULIN ADVICE GUIDELINES:
     const systemPrompt = `${activePersona}
 
 Current Health Context:
-${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}${trendLegend}${insulinGuide}`
+${JSON.stringify(context || {}, null, 2)}${memoryContext.join('')}${trendLegend}${insulinGuide}
 
 DATA AVAILABILITY GUIDELINES - ALWAYS CHECK:
 The context includes "dataAvailability" flags. ALWAYS check these before making claims about patterns:
