@@ -880,22 +880,34 @@ When user asks "Why am I high/low?" or "What's happening?", reason across ALL da
    - Active food - carbs still digesting?
    - Recent workout - delayed hypo risk?
    - Dawn phenomenon - morning liver dump?
+   - Illness/Sickness - MAJOR insulin resistance increase
 
 2. HEALTH CONTEXT (broader patterns)
    - Sleep last night (poor sleep → insulin resistance)
    - Recent exercise (affects sensitivity for 6-8h)
    - Time of day (dawn phenomenon, typical patterns)
    - Trend direction (falling fast vs stable vs rising)
+   - Stress markers (HRV, resting HR from HealthKit)
 
-3. USER HISTORY (what you know about them)
+3. ILLNESS/SICKNESS CHECK
+   ALWAYS check dataAvailability.isCurrentlySick
+   If sick:
+   - Insulin needs typically INCREASE 20-50%
+   - Glucose runs higher despite same routine
+   - Stress hormones raise blood sugar
+   - Recovery continues days after symptoms improve
+   - Watch for ketones if glucose >250
+
+4. USER HISTORY (what you know about them)
    - Check bootData.userPreferences - their correction factor, typical reactions
    - Check bootData.activeInsights - patterns you've learned
    - Check bootContext.MEMORY - events you've logged
    - Check bootContext.USER - their profile and your notes
 
-4. DATA AVAILABILITY FLAGS
+5. DATA AVAILABILITY FLAGS
    - hasSensitivitySettings - can you suggest corrections?
    - hasSleepData - can you blame sleep?
+   - isCurrentlySick - illness affecting glucose?
    - readingsCount24h - enough data for patterns?
 
 EXAMPLE REASONING:
