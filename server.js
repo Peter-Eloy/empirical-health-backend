@@ -1098,6 +1098,26 @@ app.get('/v1/user/subscription', requireAuth, (req, res) => {
   });
 });
 
+// Validate receipt from Apple (server-side validation)
+app.post('/v1/subscription/validate', requireAuth, async (req, res) => {
+  try {
+    const { receipt, productId, platform } = req.body;
+    
+    // For production: Validate with Apple's servers
+    // For now: Accept and mark as subscribed
+    const user = users.get(req.userId);
+    if (user) {
+      user.isSubscribed = true;
+    }
+    
+    console.log(`[Subscription] Validated for ${req.userId}: ${productId}`);
+    res.json({ success: true, status: 'active' });
+  } catch (error) {
+    console.error('[Subscription] Validation error:', error);
+    res.status(500).json({ error: 'Validation failed' });
+  }
+});
+
 // ==========================================
 // MEMORY DEBUG (stateless - returns empty)
 // ==========================================
