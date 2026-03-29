@@ -4,12 +4,31 @@ const fetch = require('node-fetch');
 
 const app = express();
 
-// CORS - allow all origins for mobile app
+// CORS - mobile apps don't send Origin headers, but web dashboards might
+// For mobile: no origin check needed (they use app-bound auth)
+// For web: restrict to known domains
+const ALLOWED_WEB_ORIGINS = process.env.ALLOWED_WEB_ORIGINS 
+  ? process.env.ALLOWED_WEB_ORIGINS.split(',')
+  : ['http://localhost:3000', 'http://localhost:19006'];
+
 app.use(cors({
-  origin: '*',
+  origin: (origin, callback) => {
+    // No origin = mobile app or direct API call - ALLOW
+    // Mobile apps authenticate via Authorization header, not cookies
+    if (!origin) return callback(null, true);
+    
+    // Web requests must match allowed origins
+    if (ALLOWED_WEB_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Block unknown web origins
+    console.warn(`[CORS] Blocked web origin: ${origin}`);
+    return callback(null, false);
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  credentials: false  // We use JWT tokens, not cookies
 }));
 
 app.use(express.json());
@@ -17,6 +36,9 @@ app.use(express.json());
 // Environment variables
 const KIMI_API_KEY = process.env.KIMI_API_KEY ? process.env.KIMI_API_KEY.trim() : null;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-in-production';
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || null;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || null;
+const TWILIO_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || null;
 const PORT = 3000;
 
 // Log startup info
@@ -1115,6 +1137,61 @@ app.post('/v1/subscription/validate', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[Subscription] Validation error:', error);
     res.status(500).json({ error: 'Validation failed' });
+  }
+});
+
+// ==========================================
+// EMERGENCY SMS (Twilio - server-side auto-send)
+// ==========================================
+
+// POST /v1/emergency/sms
+// Called by the app when a critical low is detected and the user cannot confirm manually.
+// Charges the SMS cost back to the user subscription via the sms_log table (app-side).
+// Requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID env vars on Railway.
+app.post('/v1/emergency/sms', requireAuth, async (req, res) => {
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_MESSAGING_SERVICE_SID) {
+    return res.status(503).json({ error: 'SMS service not configured' });
+  }
+
+  const { toPhone, message, glucose } = req.body;
+  if (!toPhone || !message) {
+    return res.status(400).json({ error: 'toPhone and message are required' });
+  }
+
+  // Basic phone validation — must start with + and contain only digits after
+  if (!/^\+\d{7,15}$/.test(toPhone)) {
+    return res.status(400).json({ error: 'toPhone must be in E.164 format, e.g. +15551234567' });
+  }
+
+  try {
+    const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
+    const body = new URLSearchParams({
+      To: toPhone,
+      MessagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
+      Body: message,
+    });
+
+    const response = await fetch(twilioUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64'),
+      },
+      body: body.toString(),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('[SMS] Twilio error:', data);
+      return res.status(502).json({ error: 'SMS delivery failed', detail: data.message });
+    }
+
+    console.log(`[SMS] Sent to ${toPhone} for user ${req.userId}, glucose=${glucose}, sid=${data.sid}`);
+    res.json({ success: true, sid: data.sid });
+  } catch (error) {
+    console.error('[SMS] Error:', error.message);
+    res.status(500).json({ error: 'Internal error sending SMS' });
   }
 });
 
