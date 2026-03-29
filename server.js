@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
@@ -46,8 +48,53 @@ console.log('🦈 Starting Empirical Health API...');
 console.log('Port:', PORT);
 console.log('Kimi API Key present:', !!KIMI_API_KEY);
 
+// ==========================================
+// USER STATE PERSISTENCE (fs-based)
+// Survives process restarts within the same Railway deployment.
+// Lost on redeploy — app re-validates via /subscription/validate on next purchase listener fire.
+// ==========================================
+
+const USERS_FILE = path.join('/tmp', 'opend_users.json');
+
+function loadUsers() {
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const raw = fs.readFileSync(USERS_FILE, 'utf8');
+      const obj = JSON.parse(raw);
+      const map = new Map();
+      for (const [id, data] of Object.entries(obj)) {
+        map.set(id, {
+          ...data,
+          installDate: new Date(data.installDate),
+          lastMessageTime: data.lastMessageTime || [],
+        });
+      }
+      console.log(`[Users] Loaded ${map.size} users from disk`);
+      return map;
+    }
+  } catch (e) {
+    console.warn('[Users] Could not load users file, starting fresh:', e.message);
+  }
+  return new Map();
+}
+
+function saveUsers() {
+  try {
+    const obj = {};
+    for (const [id, data] of users.entries()) {
+      obj[id] = {
+        ...data,
+        installDate: data.installDate instanceof Date ? data.installDate.toISOString() : data.installDate,
+      };
+    }
+    fs.writeFileSync(USERS_FILE, JSON.stringify(obj), 'utf8');
+  } catch (e) {
+    console.warn('[Users] Could not save users file:', e.message);
+  }
+}
+
 // In-memory storage (user state only, memory is stateless - stored in app)
-const users = new Map();
+const users = loadUsers();
 
 // ==========================================
 // KIMI TOOLS DEFINITION (Native tool_calls)
@@ -487,6 +534,7 @@ const checkAccess = (req, res, next) => {
       messageCount: 0,
       lastMessageTime: []
     });
+    saveUsers();
   }
   
   const user = users.get(userId);
@@ -1130,8 +1178,9 @@ app.post('/v1/subscription/validate', requireAuth, async (req, res) => {
     const user = users.get(req.userId);
     if (user) {
       user.isSubscribed = true;
+      saveUsers();
     }
-    
+
     console.log(`[Subscription] Validated for ${req.userId}: ${productId}`);
     res.json({ success: true, status: 'active' });
   } catch (error) {
