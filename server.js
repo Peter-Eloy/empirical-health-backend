@@ -923,7 +923,7 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
   console.log('Received chat request from:', req.userId);
   
   try {
-    const { message, context, goal } = req.body;
+    const { message, context, goal, sessionHistory } = req.body;
     
     if (!message) {
       return res.status(400).json({ error: 'Message required' });
@@ -1017,11 +1017,15 @@ INSTRUCTIONS:
 - Be concise, intentional, grounded
 - If bootContext.USER does not contain the user's first name, ask for it naturally early in the first conversation, then call setPreference('user_name', '<name>') to store it — you'll use it in emergency alerts`;
 
-    // Build messages array
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: message }
-    ];
+    // Build messages array — inject session history between system prompt and current message
+    // This gives Vicente memory within a report chat session without polluting main history
+    const messages = [{ role: 'system', content: systemPrompt }];
+    if (sessionHistory && Array.isArray(sessionHistory) && sessionHistory.length > 0) {
+      for (const m of sessionHistory) {
+        if (m.role && m.content) messages.push({ role: m.role, content: m.content });
+      }
+    }
+    messages.push({ role: 'user', content: message });
     
     // Add image if provided
     if (req.body.image) {
