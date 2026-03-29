@@ -589,8 +589,7 @@ app.get('/v1/ping-kimi', async (req, res) => {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${KIMI_API_KEY}` },
       body: JSON.stringify({
         model: 'kimi-k2.5',
-        messages: [{ role: 'user', content: 'say hi' }],
-        max_tokens: 10
+        messages: [{ role: 'user', content: 'say hi' }]
       })
     });
     const text = await r.text();
@@ -1046,8 +1045,7 @@ INSTRUCTIONS:
         messages: messages,
         tools: VICENTE_TOOLS,
         tool_choice: 'auto',  // Let Kimi decide when to use tools
-        temperature: 0.7,
-        max_tokens: 2000
+        temperature: 0.7
       })
     });
     
@@ -1127,8 +1125,8 @@ INSTRUCTIONS:
       }
     }
     
-    // Get text content
-    let replyText = replyMessage.content || '';
+    // Get text content — kimi-k2.5 is a reasoning model, answer is in content (reasoning in reasoning_content)
+    let replyText = replyMessage.content || replyMessage.reasoning_content || '';
     
     // If only memory tool calls with no text, generate acknowledgment
     if (!replyText.trim() && toolCalls.length > 0 && toolResults.length === 0) {
