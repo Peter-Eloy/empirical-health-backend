@@ -584,7 +584,7 @@ app.get('/', (req, res) => {
 app.get('/v1/ping-kimi', async (req, res) => {
   if (!KIMI_API_KEY) return res.status(500).json({ error: 'No API key' });
   try {
-    const r = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+    const r = await fetch('https://api.moonshot.ai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${KIMI_API_KEY}` },
       body: JSON.stringify({
@@ -1035,7 +1035,7 @@ INSTRUCTIONS:
     console.log('Calling Kimi API with tools...');
     
     // Call Kimi API with tools
-    const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+    const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
