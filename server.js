@@ -1032,119 +1032,139 @@ INSTRUCTIONS:
     }
     
     console.log('Calling Kimi API with tools...');
-    
-    // Call Kimi API with tools
-    const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${KIMI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'kimi-k2.5',
-        messages: messages,
-        tools: VICENTE_TOOLS,
-        tool_choice: 'auto',  // Let Kimi decide when to use tools
-        temperature: 1
-      })
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Kimi API error:', response.status, errorText);
-      throw new Error(`Kimi API error: ${response.status} — ${errorText}`);
-    }
-    
-    const data = await response.json();
-    const choice = data.choices[0];
-    const finishReason = choice.finish_reason;
-    const replyMessage = choice.message;
-    
-    console.log('Kimi response:', { finishReason, hasTools: !!replyMessage.tool_calls });
-    
-    // Execute tool calls
-    const toolCalls = [];
-    const toolResults = [];
-    const actions = [];
-    
-    if (finishReason === 'tool_calls' && replyMessage.tool_calls) {
-      for (const toolCall of replyMessage.tool_calls) {
-        const functionName = toolCall.function.name;
-        const args = JSON.parse(toolCall.function.arguments);
-        
-        console.log(`[Tool] ${functionName}:`, args);
-        
-        // Execute calculation tools
-        let result = null;
-        try {
-          switch (functionName) {
-            case 'calculateIOB':
-              result = calculateIOB(args.doses, args.insulinDuration);
-              break;
-            case 'analyzeGlucoseTrend':
-              result = analyzeGlucoseTrend(args.readings, args.currentIOB);
-              break;
-            case 'calculateWorkoutNutrition':
-              result = calculateWorkoutNutrition(args);
-              break;
-            case 'calculateCorrectionDose':
-              result = calculateCorrectionDose(args);
-              break;
-            case 'analyzeSleepImpact':
-              result = analyzeSleepImpact(args);
-              break;
-            case 'predictHypoRisk':
-              result = predictHypoRisk(args);
-              break;
+
+    // Accumulated tool calls/results/actions to return to the app
+    // (memory tools are executed on-device, calculation tools on-server)
+    const allMemoryToolCalls = [];   // sent to app for on-device execution
+    const allToolResults = [];       // calculation results (informational)
+    const allActions = [];           // navigate actions
+
+    // Multi-turn tool loop — per Moonshot docs:
+    // Kimi returns finish_reason=tool_calls → we execute → feed results back → repeat until stop
+    let finishReason = 'tool_calls';
+    let replyText = '';
+    const MAX_TOOL_ROUNDS = 5; // safety cap
+    let round = 0;
+
+    while (finishReason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
+      round++;
+      console.log(`[Tool loop] Round ${round}`);
+
+      const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${KIMI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'kimi-k2.5',
+          messages: messages,
+          tools: VICENTE_TOOLS,
+          tool_choice: 'auto',
+          temperature: 1
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Kimi API error:', response.status, errorText);
+        throw new Error(`Kimi API error: ${response.status} — ${errorText}`);
+      }
+
+      const data = await response.json();
+      const choice = data.choices[0];
+      finishReason = choice.finish_reason;
+      const replyMessage = choice.message;
+
+      console.log(`[Tool loop] Round ${round} finish_reason=${finishReason}, tools=${replyMessage.tool_calls?.length || 0}`);
+
+      // Always add Kimi's assistant message back to context (required by Moonshot docs)
+      messages.push(replyMessage);
+
+      if (finishReason === 'tool_calls' && replyMessage.tool_calls) {
+        // Execute all tool calls and build role=tool messages
+        for (const toolCall of replyMessage.tool_calls) {
+          const functionName = toolCall.function.name;
+          const args = JSON.parse(toolCall.function.arguments);
+
+          console.log(`[Tool] ${functionName}:`, args);
+
+          let result = null;
+
+          // Server-side calculation tools
+          try {
+            switch (functionName) {
+              case 'calculateIOB':
+                result = calculateIOB(args.doses, args.insulinDuration);
+                break;
+              case 'analyzeGlucoseTrend':
+                result = analyzeGlucoseTrend(args.readings, args.currentIOB);
+                break;
+              case 'calculateWorkoutNutrition':
+                result = calculateWorkoutNutrition(args);
+                break;
+              case 'calculateCorrectionDose':
+                result = calculateCorrectionDose(args);
+                break;
+              case 'analyzeSleepImpact':
+                result = analyzeSleepImpact(args);
+                break;
+              case 'predictHypoRisk':
+                result = predictHypoRisk(args);
+                break;
+              case 'navigate':
+                result = { success: true };
+                allActions.push({ type: 'navigate', ...args });
+                break;
+              default:
+                // Memory tools (logEvent, setPreference, addInsight, etc.)
+                // Executed on-device — tell Kimi they succeeded so it can respond
+                result = { success: true, message: `${functionName} queued for on-device execution` };
+                allMemoryToolCalls.push({ id: toolCall.id, name: functionName, arguments: args });
+                break;
+            }
+          } catch (e) {
+            console.error(`[Tool] Error executing ${functionName}:`, e);
+            result = { error: e.message };
           }
-        } catch (e) {
-          console.error(`[Tool] Error executing ${functionName}:`, e);
-          result = { error: e.message };
-        }
-        
-        // Categorize tool calls
-        if (functionName === 'navigate') {
-          actions.push({ type: 'navigate', ...args });
-        } else if (['calculateIOB', 'analyzeGlucoseTrend', 'calculateWorkoutNutrition', 
-                     'calculateCorrectionDose', 'analyzeSleepImpact', 'predictHypoRisk'].includes(functionName)) {
-          // Calculation tools - include results
-          toolResults.push({
-            id: toolCall.id,
+
+          if (['calculateIOB', 'analyzeGlucoseTrend', 'calculateWorkoutNutrition',
+               'calculateCorrectionDose', 'analyzeSleepImpact', 'predictHypoRisk'].includes(functionName)) {
+            allToolResults.push({ id: toolCall.id, name: functionName, arguments: args, result });
+          }
+
+          // Feed result back to Kimi as role=tool (required by Moonshot docs)
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
             name: functionName,
-            arguments: args,
-            result: result
-          });
-        } else {
-          // Memory tools - for app to execute
-          toolCalls.push({
-            id: toolCall.id,
-            name: functionName,
-            arguments: args
+            content: JSON.stringify(result)
           });
         }
+      } else {
+        // finish_reason=stop — Kimi has produced the final response
+        replyText = replyMessage.content || replyMessage.reasoning_content || '';
       }
     }
-    
-    // Get text content — kimi-k2.5 is a reasoning model, answer is in content (reasoning in reasoning_content)
-    let replyText = replyMessage.content || replyMessage.reasoning_content || '';
-    
-    // If only memory tool calls with no text, generate acknowledgment
-    if (!replyText.trim() && toolCalls.length > 0 && toolResults.length === 0) {
-      replyText = `Got it. I'm noting that down.`;
+
+    // Safety fallback if loop hit max rounds without a stop
+    if (!replyText && round >= MAX_TOOL_ROUNDS) {
+      replyText = 'Done. Let me know if you need anything else.';
     }
-    
-    console.log('Sending response to app:', { 
-      textLength: replyText.length, 
-      toolCalls: toolCalls.length, 
-      toolResults: toolResults.length,
-      actions: actions.length 
+
+    console.log('Sending response to app:', {
+      textLength: replyText.length,
+      memoryToolCalls: allMemoryToolCalls.length,
+      toolResults: allToolResults.length,
+      actions: allActions.length,
+      rounds: round
     });
-    
+
     res.json({
       message: replyText,
-      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      toolResults: toolResults.length > 0 ? toolResults : undefined,
-      actions: actions.length > 0 ? actions : undefined,
+      toolCalls: allMemoryToolCalls.length > 0 ? allMemoryToolCalls : undefined,
+      toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+      actions: allActions.length > 0 ? allActions : undefined,
       finishReason: finishReason
     });
     
