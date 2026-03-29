@@ -1045,7 +1045,7 @@ INSTRUCTIONS:
         messages: messages,
         tools: VICENTE_TOOLS,
         tool_choice: 'auto',  // Let Kimi decide when to use tools
-        temperature: 0.7
+        temperature: 1
       })
     });
     
