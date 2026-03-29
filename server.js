@@ -994,7 +994,8 @@ INSTRUCTIONS:
 - Connect dots: sleep + time of day + history + current state
 - Use tools to remember new patterns you discover
 - Call multiple tools at once if needed (parallel)
-- Be concise, intentional, grounded`;
+- Be concise, intentional, grounded
+- If bootContext.USER does not contain the user's first name, ask for it naturally early in the first conversation, then call setPreference('user_name', '<name>') to store it — you'll use it in emergency alerts`;
 
     // Build messages array
     const messages = [
@@ -1129,9 +1130,10 @@ INSTRUCTIONS:
     });
     
   } catch (error) {
-    console.error('Chat error:', error.message);
-    res.status(500).json({ 
+    console.error('Chat error:', error.message, error.stack);
+    res.status(500).json({
       error: 'Internal error',
+      detail: error.message,
       message: "Having trouble connecting. Try again in a moment. 🦈"
     });
   }
