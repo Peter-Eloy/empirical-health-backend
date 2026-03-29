@@ -570,13 +570,34 @@ const checkAccess = (req, res, next) => {
 // ==========================================
 
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     service: 'Empirical Health API',
     version: '1.1.0',
     kimiConfigured: !!KIMI_API_KEY,
     features: ['tool_calls', 'stateless_memory', 'boot_context']
   });
+});
+
+// Minimal Kimi ping — no tools, no context, just "hello"
+// GET /v1/ping-kimi  (no auth required, debug only)
+app.get('/v1/ping-kimi', async (req, res) => {
+  if (!KIMI_API_KEY) return res.status(500).json({ error: 'No API key' });
+  try {
+    const r = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${KIMI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'kimi-k2.5',
+        messages: [{ role: 'user', content: 'say hi' }],
+        max_tokens: 10
+      })
+    });
+    const text = await r.text();
+    res.json({ status: r.status, body: text });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
 });
 
 // ==========================================
@@ -1033,7 +1054,7 @@ INSTRUCTIONS:
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Kimi API error:', response.status, errorText);
-      throw new Error(`Kimi API error: ${response.status}`);
+      throw new Error(`Kimi API error: ${response.status} — ${errorText}`);
     }
     
     const data = await response.json();
