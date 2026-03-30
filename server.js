@@ -1191,144 +1191,164 @@ INSTRUCTIONS:
     const allToolResults = [];       // calculation results (informational)
     const allActions = [];           // navigate actions
 
-    // Multi-turn tool loop — per Moonshot docs:
-    // Kimi returns finish_reason=tool_calls → we execute → feed results back → repeat until stop
-    let finishReason = 'tool_calls';
-    let replyText = '';
-    const MAX_TOOL_ROUNDS = 5; // safety cap
+    const activeTools = analysisOnly
+      ? VICENTE_TOOLS.filter(t => !['logInsulinDose', 'logMeal', 'logGymSession', 'logSleep'].includes(t.function.name))
+      : VICENTE_TOOLS;
+
+    // Helper: execute a single tool call, mutate allMemoryToolCalls/allToolResults/allActions
+    function executeTool(toolCall) {
+      const functionName = toolCall.function.name;
+      const args = JSON.parse(toolCall.function.arguments);
+      console.log(`[Tool] ${functionName}:`, args);
+      let result = null;
+      try {
+        switch (functionName) {
+          case 'calculateIOB':
+            result = calculateIOB(args.doses, args.insulinDuration);
+            break;
+          case 'analyzeGlucoseTrend':
+            result = analyzeGlucoseTrend(args.readings, args.currentIOB);
+            break;
+          case 'calculateWorkoutNutrition':
+            result = calculateWorkoutNutrition(args);
+            break;
+          case 'calculateCorrectionDose':
+            result = calculateCorrectionDose(args);
+            break;
+          case 'analyzeSleepImpact':
+            result = analyzeSleepImpact(args);
+            break;
+          case 'predictHypoRisk':
+            result = predictHypoRisk(args);
+            break;
+          case 'navigate':
+            result = { success: true };
+            allActions.push({ type: 'navigate', ...args });
+            break;
+          default:
+            result = { success: true, message: `${functionName} queued for on-device execution` };
+            allMemoryToolCalls.push({ id: toolCall.id, name: functionName, arguments: args });
+            break;
+        }
+      } catch (e) {
+        console.error(`[Tool] Error executing ${functionName}:`, e);
+        result = { error: e.message };
+      }
+      if (['calculateIOB', 'analyzeGlucoseTrend', 'calculateWorkoutNutrition',
+           'calculateCorrectionDose', 'analyzeSleepImpact', 'predictHypoRisk'].includes(functionName)) {
+        allToolResults.push({ id: toolCall.id, name: functionName, arguments: args, result });
+      }
+      return { toolCall, result };
+    }
+
+    // Phase 1: non-streaming tool rounds until no more tool calls
+    let needsMoreTools = true;
+    const MAX_TOOL_ROUNDS = 5;
     let round = 0;
 
-    while (finishReason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
+    while (needsMoreTools && round < MAX_TOOL_ROUNDS) {
       round++;
       console.log(`[Tool loop] Round ${round}`);
 
       const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${KIMI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: 'kimi-k2.5',
-          messages: messages,
-          tools: analysisOnly
-            ? VICENTE_TOOLS.filter(t => !['logInsulinDose', 'logMeal', 'logGymSession', 'logSleep'].includes(t.function.name))
-            : VICENTE_TOOLS,
-          tool_choice: 'auto',
-          temperature: 1
-        })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${KIMI_API_KEY}` },
+        body: JSON.stringify({ model: 'kimi-k2.5', messages, tools: activeTools, tool_choice: 'auto', temperature: 1 })
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Kimi API error:', response.status, errorText);
         throw new Error(`Kimi API error: ${response.status} — ${errorText}`);
       }
 
       const data = await response.json();
       const choice = data.choices[0];
-      finishReason = choice.finish_reason;
       const replyMessage = choice.message;
+      console.log(`[Tool loop] Round ${round} finish_reason=${choice.finish_reason}, tools=${replyMessage.tool_calls?.length || 0}`);
 
-      console.log(`[Tool loop] Round ${round} finish_reason=${finishReason}, tools=${replyMessage.tool_calls?.length || 0}`);
-
-      // Always add Kimi's assistant message back to context (required by Moonshot docs)
       messages.push(replyMessage);
 
-      if (finishReason === 'tool_calls' && replyMessage.tool_calls) {
-        // Execute all tool calls and build role=tool messages
+      if (choice.finish_reason === 'tool_calls' && replyMessage.tool_calls?.length > 0) {
         for (const toolCall of replyMessage.tool_calls) {
-          const functionName = toolCall.function.name;
-          const args = JSON.parse(toolCall.function.arguments);
-
-          console.log(`[Tool] ${functionName}:`, args);
-
-          let result = null;
-
-          // Server-side calculation tools
-          try {
-            switch (functionName) {
-              case 'calculateIOB':
-                result = calculateIOB(args.doses, args.insulinDuration);
-                break;
-              case 'analyzeGlucoseTrend':
-                result = analyzeGlucoseTrend(args.readings, args.currentIOB);
-                break;
-              case 'calculateWorkoutNutrition':
-                result = calculateWorkoutNutrition(args);
-                break;
-              case 'calculateCorrectionDose':
-                result = calculateCorrectionDose(args);
-                break;
-              case 'analyzeSleepImpact':
-                result = analyzeSleepImpact(args);
-                break;
-              case 'predictHypoRisk':
-                result = predictHypoRisk(args);
-                break;
-              case 'navigate':
-                result = { success: true };
-                allActions.push({ type: 'navigate', ...args });
-                break;
-              default:
-                // Memory tools (logEvent, setPreference, addInsight, etc.)
-                // Executed on-device — tell Kimi they succeeded so it can respond
-                result = { success: true, message: `${functionName} queued for on-device execution` };
-                allMemoryToolCalls.push({ id: toolCall.id, name: functionName, arguments: args });
-                break;
-            }
-          } catch (e) {
-            console.error(`[Tool] Error executing ${functionName}:`, e);
-            result = { error: e.message };
-          }
-
-          if (['calculateIOB', 'analyzeGlucoseTrend', 'calculateWorkoutNutrition',
-               'calculateCorrectionDose', 'analyzeSleepImpact', 'predictHypoRisk'].includes(functionName)) {
-            allToolResults.push({ id: toolCall.id, name: functionName, arguments: args, result });
-          }
-
-          // Feed result back to Kimi as role=tool (required by Moonshot docs)
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            name: functionName,
-            content: JSON.stringify(result)
-          });
+          const { result } = executeTool(toolCall);
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, name: toolCall.function.name, content: JSON.stringify(result) });
         }
       } else {
-        // finish_reason=stop — Kimi has produced the final response
-        replyText = replyMessage.content || replyMessage.reasoning_content || '';
+        // No more tool calls — but we'll re-request with stream:true for the final answer
+        needsMoreTools = false;
       }
     }
 
-    // Safety fallback if loop hit max rounds without a stop
-    if (!replyText && round >= MAX_TOOL_ROUNDS) {
-      replyText = 'Done. Let me know if you need anything else.';
-    }
+    // Phase 2: stream the final response
+    // SSE format: each chunk is "data: {token}\n\n", finished with "data: [DONE]\n\n"
+    // then a final "data: {meta}\n\n" event with toolCalls/toolResults/actions
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
 
-    console.log('Sending response to app:', {
-      textLength: replyText.length,
-      memoryToolCalls: allMemoryToolCalls.length,
-      toolResults: allToolResults.length,
-      actions: allActions.length,
-      rounds: round
+    const streamResponse = await fetch('https://api.moonshot.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${KIMI_API_KEY}` },
+      body: JSON.stringify({ model: 'kimi-k2.5', messages, tools: activeTools, tool_choice: 'auto', temperature: 1, stream: true })
     });
 
-    res.json({
-      message: replyText,
+    if (!streamResponse.ok) {
+      const errorText = await streamResponse.text();
+      res.write(`data: ${JSON.stringify({ error: `Kimi stream error: ${streamResponse.status}` })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Read SSE stream from Kimi line by line
+    let fullText = '';
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    for await (const chunk of streamResponse.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete last line
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(payload);
+          const delta = parsed.choices?.[0]?.delta;
+          if (delta?.content) {
+            fullText += delta.content;
+            // Forward token to app
+            res.write(`data: ${JSON.stringify({ token: delta.content })}\n\n`);
+          }
+        } catch {
+          // malformed chunk — skip
+        }
+      }
+    }
+
+    console.log('Stream complete:', { chars: fullText.length, toolCalls: allMemoryToolCalls.length, rounds: round });
+
+    // Final metadata event — app executes tool calls and knows stream is done
+    res.write(`data: ${JSON.stringify({
+      done: true,
       toolCalls: allMemoryToolCalls.length > 0 ? allMemoryToolCalls : undefined,
       toolResults: allToolResults.length > 0 ? allToolResults : undefined,
       actions: allActions.length > 0 ? allActions : undefined,
-      finishReason: finishReason
-    });
+    })}\n\n`);
+    res.end();
     
   } catch (error) {
     console.error('Chat error:', error.message, error.stack);
-    res.status(500).json({
-      error: 'Internal error',
-      detail: error.message,
-      message: "Having trouble connecting. Try again in a moment. 🦈"
-    });
+    if (res.headersSent) {
+      // Stream already started — send error as SSE event then close
+      res.write(`data: ${JSON.stringify({ error: error.message, done: true })}\n\n`);
+      res.end();
+    } else {
+      res.status(500).json({ error: 'Internal error', message: "Having trouble connecting. Try again in a moment. 🦈" });
+    }
   }
 });
 
