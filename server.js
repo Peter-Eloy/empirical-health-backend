@@ -489,6 +489,17 @@ const VICENTE_TOOLS = [
   {
     type: "function",
     function: {
+      name: "getActiveEffects",
+      description: "Get the current active insulin on board (IOB), active food carbs still absorbing, and a correction decision. Call this before giving any dosing advice, or whenever the user asks about their current state, IOB, or whether they should correct. This runs on the device using real logged data.",
+      parameters: {
+        type: "object",
+        properties: {}
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "checkRecentLog",
       description: "Check if an entry already exists in the database before logging, to avoid duplicates. ALWAYS call this before logMeal, logInsulinDose, logGymSession, or logSleep when the user tells you about something they did.",
       parameters: {
