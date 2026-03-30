@@ -437,6 +437,58 @@ const VICENTE_TOOLS = [
   {
     type: "function",
     function: {
+      name: "logInsulinDose",
+      description: "Save an insulin dose to the log. ALWAYS call this when the user says they took, injected, or dosed any insulin units. Do not just say you logged it — call this tool.",
+      parameters: {
+        type: "object",
+        required: ["units", "insulinType"],
+        properties: {
+          units: {
+            type: "number",
+            description: "Number of insulin units taken"
+          },
+          insulinType: {
+            type: "string",
+            enum: ["rapid", "ultra_rapid", "long_acting"],
+            description: "Type of insulin: rapid (Humalog/NovoLog), ultra_rapid (Fiasp/Lyumjev), long_acting (Lantus/Tresiba/Basaglar)"
+          },
+          isCorrection: {
+            type: "boolean",
+            default: false,
+            description: "True if this is a correction dose (not for food)"
+          },
+          correctionReason: {
+            type: "string",
+            description: "Reason for correction (e.g., 'high_glucose', 'missed_dose')"
+          },
+          mealType: {
+            type: "string",
+            enum: ["breakfast", "lunch", "dinner", "snack"],
+            description: "Meal this insulin is for (if not a correction)"
+          },
+          carbsG: {
+            type: "number",
+            description: "Carbs in grams being covered (optional)"
+          },
+          glucoseBefore: {
+            type: "number",
+            description: "Glucose reading at time of dose (optional)"
+          },
+          preBolusMins: {
+            type: "number",
+            description: "Minutes pre-bolus before eating (0 if taken at meal time)"
+          },
+          notes: {
+            type: "string",
+            description: "Any additional notes"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "navigate",
       description: "Navigate the user to a specific screen in the app. Use when user asks to 'show me' something or when suggesting they view specific data.",
       parameters: {
