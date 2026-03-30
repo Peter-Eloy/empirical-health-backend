@@ -489,6 +489,91 @@ const VICENTE_TOOLS = [
   {
     type: "function",
     function: {
+      name: "checkRecentLog",
+      description: "Check if an entry already exists in the database before logging, to avoid duplicates. ALWAYS call this before logMeal, logInsulinDose, logGymSession, or logSleep when the user tells you about something they did.",
+      parameters: {
+        type: "object",
+        required: ["logType"],
+        properties: {
+          logType: {
+            type: "string",
+            enum: ["insulin", "meal", "gym", "sleep"],
+            description: "What to check"
+          },
+          withinMinutes: {
+            type: "number",
+            description: "How far back to look in minutes (default 30)"
+          },
+          exerciseName: {
+            type: "string",
+            description: "For gym: specific exercise name to check"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "logMeal",
+      description: "Save a meal to the food log. Call this when the user mentions eating something. Only call after checkRecentLog confirms it is not already logged.",
+      parameters: {
+        type: "object",
+        required: ["foodName"],
+        properties: {
+          foodName: { type: "string", description: "Name of the food or meal (e.g. 'Margherita Pizza')" },
+          mealType: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"], description: "Meal type" },
+          carbsG: { type: "number", description: "Estimated carbs in grams" },
+          absorptionProfile: { type: "string", enum: ["fast", "medium", "slow"], description: "How fast carbs absorb" },
+          insulinUnits: { type: "number", description: "Insulin taken for this meal (if told)" },
+          glucoseBefore: { type: "number", description: "Glucose before eating" },
+          notes: { type: "string", description: "Any notes" }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "logGymSession",
+      description: "Save a gym or strength training exercise. Call once per exercise mentioned. Only call after checkRecentLog confirms it is not already logged today.",
+      parameters: {
+        type: "object",
+        required: ["exercise"],
+        properties: {
+          exercise: { type: "string", description: "Exercise name (e.g. 'Bench Press', 'Squat')" },
+          sets: { type: "number", description: "Number of sets" },
+          reps: { type: "number", description: "Reps per set" },
+          weightKg: { type: "number", description: "Weight used in kg" },
+          glucosePre: { type: "number", description: "Glucose before workout" },
+          glucosePost: { type: "number", description: "Glucose after workout" },
+          notes: { type: "string", description: "Any notes" }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "logSleep",
+      description: "Save a sleep entry. Call when user tells you about their sleep. Only call after checkRecentLog confirms it is not already logged.",
+      parameters: {
+        type: "object",
+        required: ["totalHours"],
+        properties: {
+          date: { type: "string", description: "Date of sleep YYYY-MM-DD (omit for today/last night)" },
+          totalHours: { type: "number", description: "Total hours slept" },
+          sleepQuality: { type: "number", minimum: 1, maximum: 5, description: "Quality 1=terrible 5=excellent" },
+          startTime: { type: "string", description: "Bedtime (HH:MM or ISO)" },
+          endTime: { type: "string", description: "Wake time (HH:MM or ISO)" },
+          notes: { type: "string", description: "Notes e.g. woke up twice, vivid dreams" }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "navigate",
       description: "Navigate the user to a specific screen in the app. Use when user asks to 'show me' something or when suggesting they view specific data.",
       parameters: {
