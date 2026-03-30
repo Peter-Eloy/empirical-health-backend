@@ -1209,7 +1209,17 @@ INSTRUCTIONS:
 - Use tools to remember new patterns you discover
 - Call multiple tools at once if needed (parallel)
 - Be concise, intentional, grounded
-- If bootContext.USER does not contain the user's first name, ask for it naturally early in the first conversation, then call setPreference('user_name', '<name>') to store it — you'll use it in emergency alerts`;
+- If bootContext.USER does not contain the user's first name, ask for it naturally early in the first conversation, then call setPreference('user_name', '<name>') to store it — you'll use it in emergency alerts
+
+6. FOOD IMAGE ANALYSIS
+   When the user sends a photo of food:
+   - Identify the dish and ingredients visually
+   - Estimate: calories, carbs (g), protein (g), fat (g), fiber (g)
+   - Give a glycemic impact assessment for a T1D (fast spike? slow rise? mixed?)
+   - Suggest an absorption profile: fast / medium / slow
+   - Suggest whether to pre-bolus and by how many minutes given their current glucose and IOB
+   - Format clearly: food name, macros table, then your T1D-specific advice
+   - If the image is NOT food, just respond naturally in your Vicente persona — no need to force a nutrition analysis`;
 
     // Build messages array — inject session history between system prompt and current message
     // This gives Vicente memory within a report chat session without polluting main history
@@ -1219,14 +1229,14 @@ INSTRUCTIONS:
         if (m.role && m.content) messages.push({ role: m.role, content: m.content });
       }
     }
-    messages.push({ role: 'user', content: message });
-    
-    // Add image if provided
+    // Add image if provided — attach to the last (current) user message
     if (req.body.image) {
-      messages[1].content = [
+      messages.push({ role: 'user', content: [
         { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${req.body.image}` } },
-        { type: 'text', text: message }
-      ];
+        { type: 'text', text: message || 'What is this food? Estimate the macros and give me T1D advice.' }
+      ]});
+    } else {
+      messages.push({ role: 'user', content: message });
     }
     
     console.log('Calling Kimi API with tools...');
