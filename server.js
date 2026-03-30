@@ -88,15 +88,6 @@ async function initDb() {
     )
   `);
 
-  // Promo code redemptions — one row per code (codes are single-use globally)
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS promo_redemptions (
-      code TEXT PRIMARY KEY,
-      redeemed_by TEXT NOT NULL,
-      redeemed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
   console.log('[DB] Tables ready');
 }
 
@@ -118,48 +109,6 @@ async function getActiveSubscription(userId) {
     [userId]
   );
   return result.rows[0] || null;
-}
-
-// ==========================================
-// PROMO CODES (hardcoded — edit this list to add/remove codes)
-// ==========================================
-
-const PROMO_CODES = {
-  'OPEND2024':   { description: 'Beta tester access' },
-  'VICENTEFREE': { description: 'Influencer / partner access' },
-  'DIABETESLIFE':{ description: 'Community free access' },
-  'T1DSTRONG':   { description: 'T1D community access' },
-};
-
-async function redeemPromoCode(code, userId) {
-  const promo = PROMO_CODES[code.toUpperCase()];
-  if (!promo) return { valid: false, error: 'Invalid code' };
-
-  // Check if already redeemed by anyone
-  const existing = await db.query(
-    `SELECT redeemed_by FROM promo_redemptions WHERE code = $1`,
-    [code.toUpperCase()]
-  );
-  if (existing.rows.length > 0) {
-    return { valid: false, error: 'Code already used' };
-  }
-
-  // Record redemption
-  await db.query(
-    `INSERT INTO promo_redemptions (code, redeemed_by, redeemed_at) VALUES ($1, $2, NOW())`,
-    [code.toUpperCase(), userId]
-  );
-
-  // Grant free permanent access
-  await upsertSubscription({
-    userId,
-    platform: 'promo',
-    productId: 'promo_free',
-    status: 'active',
-    expiresAt: null,
-  });
-
-  return { valid: true, ...promo };
 }
 
 // Upsert subscription row
@@ -1624,25 +1573,6 @@ app.post('/v1/subscription/validate', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[Subscription] Validate error:', e.message);
     res.status(500).json({ error: 'Validation failed' });
-  }
-});
-
-// ── Promo code redemption ─────────────────────────────────────────────────────
-app.post('/v1/subscription/promo', requireAuth, async (req, res) => {
-  const { code } = req.body;
-  if (!code) return res.status(400).json({ error: 'code required' });
-
-  try {
-    await ensureUser(req.userId);
-    const result = await redeemPromoCode(code, req.userId);
-    if (!result.valid) {
-      return res.status(400).json({ error: result.error });
-    }
-    console.log(`[Promo] ${req.userId} redeemed ${code.toUpperCase()} (${result.type})`);
-    res.json(result);
-  } catch (e) {
-    console.error('[Promo] Error:', e.message);
-    res.status(500).json({ error: 'Failed to redeem code' });
   }
 });
 
