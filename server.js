@@ -125,15 +125,10 @@ async function getActiveSubscription(userId) {
 // ==========================================
 
 const PROMO_CODES = {
-  // Free access codes — permanent, no expiry
-  'OPEND2024':   { type: 'free', description: 'Beta tester access' },
-  'VICENTEFREE': { type: 'free', description: 'Influencer / partner access' },
-  'DIABETESLIFE':{ type: 'free', description: 'Community free access' },
-  'T1DSTRONG':   { type: 'free', description: 'T1D community access' },
-
-  // Discount codes — percentage off
-  'WELCOME20':   { type: 'discount', percent: 20, description: '20% off for new users' },
-  'HEALTH50':    { type: 'discount', percent: 50, description: '50% off promo' },
+  'OPEND2024':   { description: 'Beta tester access' },
+  'VICENTEFREE': { description: 'Influencer / partner access' },
+  'DIABETESLIFE':{ description: 'Community free access' },
+  'T1DSTRONG':   { description: 'T1D community access' },
 };
 
 async function redeemPromoCode(code, userId) {
@@ -155,16 +150,14 @@ async function redeemPromoCode(code, userId) {
     [code.toUpperCase(), userId]
   );
 
-  // If free code — grant subscription immediately
-  if (promo.type === 'free') {
-    await upsertSubscription({
-      userId,
-      platform: 'promo',
-      productId: 'promo_free',
-      status: 'active',
-      expiresAt: null, // no expiry
-    });
-  }
+  // Grant free permanent access
+  await upsertSubscription({
+    userId,
+    platform: 'promo',
+    productId: 'promo_free',
+    status: 'active',
+    expiresAt: null,
+  });
 
   return { valid: true, ...promo };
 }
