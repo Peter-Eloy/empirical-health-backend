@@ -1071,7 +1071,7 @@ app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
   console.log('Received chat request from:', req.userId);
   
   try {
-    const { message, context, goal, sessionHistory } = req.body;
+    const { message, context, goal, sessionHistory, analysisOnly } = req.body;
     
     if (!message) {
       return res.status(400).json({ error: 'Message required' });
@@ -1211,7 +1211,9 @@ INSTRUCTIONS:
         body: JSON.stringify({
           model: 'kimi-k2.5',
           messages: messages,
-          tools: VICENTE_TOOLS,
+          tools: analysisOnly
+            ? VICENTE_TOOLS.filter(t => !['logInsulinDose', 'logMeal', 'logGymSession', 'logSleep'].includes(t.function.name))
+            : VICENTE_TOOLS,
           tool_choice: 'auto',
           temperature: 1
         })
