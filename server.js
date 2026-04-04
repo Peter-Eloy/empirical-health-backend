@@ -1478,14 +1478,28 @@ After setPreference or logEvent calls that reveal personal info, always consider
       round++;
       console.log(`[Tool loop] Round ${round}`);
 
-      const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${KIMI_API_KEY}` },
-        body: JSON.stringify({ model: 'kimi-k2.5', messages, tools: activeTools, tool_choice: 'auto', temperature: 1 })
-      });
+      // Retry on Kimi overload (429) with exponential backoff
+      let response;
+      const MAX_RETRIES = 3;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${KIMI_API_KEY}` },
+          body: JSON.stringify({ model: 'kimi-k2.5', messages, tools: activeTools, tool_choice: 'auto', temperature: 1 })
+        });
+        if (response.status !== 429) break;
+        if (attempt < MAX_RETRIES) {
+          const delay = (attempt + 1) * 2000; // 2s, 4s, 6s
+          console.log(`[Kimi] Overloaded, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
+        if (response.status === 429) {
+          throw new Error('Kimi is busy right now. Try again in a few seconds.');
+        }
         throw new Error(`Kimi API error: ${response.status} — ${errorText}`);
       }
 
@@ -1570,12 +1584,15 @@ After setPreference or logEvent calls that reveal personal info, always consider
     
   } catch (error) {
     console.error('Chat error:', error.message, error.stack);
+    const isBusy = error.message?.includes('busy') || error.message?.includes('429') || error.message?.includes('overloaded');
+    const userMessage = isBusy
+      ? "The AI is overloaded right now. Give it a few seconds and try again. 🦈"
+      : "Having trouble connecting. Try again in a moment. 🦈";
     if (res.headersSent) {
-      // Stream already started — send error as SSE event then close
       res.write(`data: ${JSON.stringify({ error: error.message, done: true })}\n\n`);
       res.end();
     } else {
-      res.status(500).json({ error: 'Internal error', message: "Having trouble connecting. Try again in a moment. 🦈" });
+      res.status(isBusy ? 503 : 500).json({ error: 'Internal error', message: userMessage });
     }
   }
 });
