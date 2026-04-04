@@ -56,27 +56,11 @@ async function initDb() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
       user_id TEXT PRIMARY KEY,
-      install_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       message_count INTEGER NOT NULL DEFAULT 0,
       last_message_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS subscriptions (
-      id SERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-      platform TEXT NOT NULL,             -- 'ios' | 'android'
-      product_id TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active', -- 'active' | 'canceled' | 'expired' | 'grace_period' | 'refunded'
-      original_transaction_id TEXT,       -- Apple: originalTransactionId
-      purchase_token TEXT,                -- Google: purchaseToken
-      expires_at TIMESTAMPTZ,
-      trial_end TIMESTAMPTZ,
-      last_verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE(user_id, platform)
+      last_persona TEXT,
+      last_goal TEXT
     )
   `);
 
@@ -99,40 +83,10 @@ async function ensureUser(userId) {
   );
 }
 
-// Get active subscription for a user (null if none)
-async function getActiveSubscription(userId) {
-  const result = await db.query(
-    `SELECT * FROM subscriptions
-     WHERE user_id = $1 AND status = 'active' AND (expires_at IS NULL OR expires_at > NOW())
-     ORDER BY expires_at DESC NULLS LAST
-     LIMIT 1`,
-    [userId]
-  );
-  return result.rows[0] || null;
-}
-
-// Upsert subscription row
-async function upsertSubscription({ userId, platform, productId, status, originalTransactionId, purchaseToken, expiresAt }) {
-  await db.query(
-    `INSERT INTO subscriptions (user_id, platform, product_id, status, original_transaction_id, purchase_token, expires_at, last_verified_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-     ON CONFLICT (user_id, platform) DO UPDATE SET
-       product_id = EXCLUDED.product_id,
-       status = EXCLUDED.status,
-       original_transaction_id = COALESCE(EXCLUDED.original_transaction_id, subscriptions.original_transaction_id),
-       purchase_token = COALESCE(EXCLUDED.purchase_token, subscriptions.purchase_token),
-       expires_at = EXCLUDED.expires_at,
-       last_verified_at = NOW()`,
-    [userId, platform, productId, status, originalTransactionId || null, purchaseToken || null, expiresAt || null]
-  );
-}
-
 // Log startup info
 console.log('🦈 Starting Empirical Health API...');
 console.log('Port:', PORT);
 console.log('Kimi API Key present:', !!KIMI_API_KEY);
-console.log('Apple validation:', APPLE_SHARED_SECRET ? 'configured' : 'NOT configured (stub mode)');
-console.log('Google validation:', GOOGLE_SERVICE_ACCOUNT_JSON ? 'configured' : 'NOT configured (stub mode)');
 
 // Init DB on startup
 initDb().catch(e => console.error('[DB] Init failed:', e));
@@ -897,23 +851,6 @@ const checkAccess = async (req, res, next) => {
   try {
     await ensureUser(userId);
 
-    // Check subscription
-    const sub = await getActiveSubscription(userId);
-    const isSubscribed = !!sub;
-
-    // Check trial (48h from first seen = user row created_at)
-    const userRow = await db.query(`SELECT created_at FROM users WHERE user_id = $1`, [userId]);
-    const installDate = userRow.rows[0]?.created_at || new Date();
-    const hoursSinceInstall = (Date.now() - new Date(installDate).getTime()) / (1000 * 60 * 60);
-    const isTrialActive = hoursSinceInstall < 48;
-
-    if (!isTrialActive && !isSubscribed) {
-      return res.status(403).json({
-        error: 'Subscription required',
-        message: 'Trial expired. Please subscribe to continue.'
-      });
-    }
-
     // Rate limiting: 20 messages per minute via DB
     const rlResult = await db.query(
       `INSERT INTO rate_limits (user_id, message_times) VALUES ($1, '[]')
@@ -930,7 +867,16 @@ const checkAccess = async (req, res, next) => {
 
     times.push(now);
     await db.query(`UPDATE rate_limits SET message_times = $1 WHERE user_id = $2`, [JSON.stringify(times), userId]);
-    await db.query(`UPDATE users SET message_count = message_count + 1, last_message_at = NOW() WHERE user_id = $1`, [userId]);
+
+    // Analytics: track usage + persona/goal
+    const { goal, persona } = req.body || {};
+    await db.query(
+      `UPDATE users SET message_count = message_count + 1, last_message_at = NOW()
+       ${goal ? ', last_goal = $2' : ''}
+       ${persona ? `, last_persona = $${goal ? 3 : 2}` : ''}
+       WHERE user_id = $1`,
+      [userId, ...(goal ? [goal] : []), ...(persona ? [persona] : [])]
+    );
 
     next();
   } catch (e) {
@@ -1624,88 +1570,23 @@ After setPreference or logEvent calls that reveal personal info, always consider
   }
 });
 
-// ==========================================
-// SUBSCRIPTION ENDPOINTS
-// ==========================================
+// ── Analytics endpoint ────────────────────────────────────────────────────────
 
-app.get('/v1/user/trial', requireAuth, async (req, res) => {
+app.get('/v1/user/stats', requireAuth, async (req, res) => {
   try {
-    await ensureUser(req.userId);
-    const userRow = await db.query(`SELECT created_at, message_count FROM users WHERE user_id = $1`, [req.userId]);
-    const installDate = userRow.rows[0]?.created_at || new Date();
-    const hoursSinceInstall = (Date.now() - new Date(installDate).getTime()) / (1000 * 60 * 60);
-    const hoursLeft = Math.max(0, 48 - hoursSinceInstall);
-    const sub = await getActiveSubscription(req.userId);
-    res.json({
-      isTrial: hoursLeft > 0,
-      hoursLeft: Math.floor(hoursLeft),
-      daysLeft: Math.ceil(hoursLeft / 24),
-      isSubscribed: !!sub,
-      messageCount: userRow.rows[0]?.message_count || 0,
-    });
+    const userRow = await db.query(`SELECT * FROM users WHERE user_id = $1`, [req.userId]);
+    res.json(userRow.rows[0] || {});
   } catch (e) {
-    console.error('[trial]', e.message);
-    res.json({ isTrial: true, daysLeft: 2, hoursLeft: 48, isSubscribed: false });
+    console.error('[stats]', e.message);
+    res.json({});
   }
 });
-
-app.get('/v1/user/subscription', requireAuth, async (req, res) => {
-  try {
-    await ensureUser(req.userId);
-    const sub = await getActiveSubscription(req.userId);
-    res.json({
-      isActive: !!sub,
-      platform: sub?.platform || null,
-      productId: sub?.product_id || null,
-      expiresAt: sub?.expires_at || null,
-      status: sub?.status || 'none',
-    });
-  } catch (e) {
-    console.error('[subscription]', e.message);
-    res.json({ isActive: false });
-  }
-});
-
-// ── Apple receipt validation ──────────────────────────────────────────────────
-async function validateAppleReceipt(receipt) {
-  if (!APPLE_SHARED_SECRET) {
-    // Stub: accept until shared secret is configured
-    console.warn('[Apple] No shared secret — accepting receipt in stub mode');
-    return { valid: true, expiresAt: null, originalTransactionId: 'stub' };
-  }
-
-  const body = { 'receipt-data': receipt, password: APPLE_SHARED_SECRET, 'exclude-old-transactions': true };
-
-  // Try production first, fall back to sandbox
-  for (const url of ['https://buy.itunes.apple.com/verifyReceipt', 'https://sandbox.itunes.apple.com/verifyReceipt']) {
-    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const data = await r.json();
-
-    if (data.status === 21007) continue; // sandbox receipt sent to production — retry on sandbox
-    if (data.status !== 0) return { valid: false, error: `Apple status ${data.status}` };
-
-    const latest = data.latest_receipt_info?.sort((a, b) => b.expires_date_ms - a.expires_date_ms)[0];
-    if (!latest) return { valid: false, error: 'No receipt info' };
-
-    const expiresAt = new Date(parseInt(latest.expires_date_ms));
-    const isActive = expiresAt > new Date();
-
-    return {
-      valid: isActive,
-      expiresAt,
-      originalTransactionId: latest.original_transaction_id,
-      productId: latest.product_id,
-    };
-  }
-  return { valid: false, error: 'Apple validation failed' };
-}
 
 // ── Google purchase validation ────────────────────────────────────────────────
 async function validateGooglePurchase(productId, purchaseToken) {
   if (!GOOGLE_SERVICE_ACCOUNT_JSON) {
-    // Stub: accept until service account is configured
-    console.warn('[Google] No service account — accepting purchase in stub mode');
-    return { valid: true, expiresAt: null, purchaseToken };
+    console.warn('[Google] No service account configured');
+    return { valid: false };
   }
 
   try {
@@ -1756,140 +1637,6 @@ async function validateGooglePurchase(productId, purchaseToken) {
   }
 }
 
-// ── Validate endpoint (called by app after purchase) ─────────────────────────
-app.post('/v1/subscription/validate', requireAuth, async (req, res) => {
-  const { receipt, productId, platform, purchaseToken } = req.body;
-  const userId = req.userId;
-
-  if (!productId || !platform) {
-    return res.status(400).json({ error: 'productId and platform required' });
-  }
-
-  try {
-    await ensureUser(userId);
-
-    let validation;
-    if (platform === 'ios') {
-      if (!receipt) return res.status(400).json({ error: 'receipt required for iOS' });
-      validation = await validateAppleReceipt(receipt);
-    } else if (platform === 'android') {
-      if (!purchaseToken) return res.status(400).json({ error: 'purchaseToken required for Android' });
-      validation = await validateGooglePurchase(productId, purchaseToken);
-    } else {
-      return res.status(400).json({ error: 'platform must be ios or android' });
-    }
-
-    if (!validation.valid) {
-      console.warn(`[Subscription] Invalid receipt for ${userId}: ${validation.error}`);
-      return res.status(402).json({ error: 'Invalid receipt', detail: validation.error });
-    }
-
-    await upsertSubscription({
-      userId,
-      platform,
-      productId,
-      status: 'active',
-      originalTransactionId: validation.originalTransactionId,
-      purchaseToken: validation.purchaseToken,
-      expiresAt: validation.expiresAt,
-    });
-
-    console.log(`[Subscription] Activated for ${userId}: ${productId} on ${platform}, expires ${validation.expiresAt}`);
-    res.json({ success: true, status: 'active', expiresAt: validation.expiresAt });
-  } catch (e) {
-    console.error('[Subscription] Validate error:', e.message);
-    res.status(500).json({ error: 'Validation failed' });
-  }
-});
-
-// ── Apple webhook (App Store Server Notifications V2) ────────────────────────
-app.post('/v1/webhooks/apple', express.json({ type: '*/*' }), async (req, res) => {
-  try {
-    // Payload is a signed JWT (JWS) — decode without verifying for now
-    // TODO: verify Apple's certificate chain for production hardening
-    const signedPayload = req.body?.signedPayload;
-    if (!signedPayload) return res.status(400).json({ error: 'No signedPayload' });
-
-    const parts = signedPayload.split('.');
-    if (parts.length < 2) return res.status(400).json({ error: 'Invalid JWS' });
-
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
-    const notificationType = payload.notificationType;
-    const subtype = payload.subtype;
-    const transactionInfo = payload.data?.signedTransactionInfo;
-    let txn = {};
-    if (transactionInfo) {
-      const txParts = transactionInfo.split('.');
-      txn = JSON.parse(Buffer.from(txParts[1], 'base64url').toString());
-    }
-
-    const userId = txn.appAccountToken || null; // set this in the purchase flow
-    const productId = txn.productId;
-    const expiresAt = txn.expiresDate ? new Date(txn.expiresDate) : null;
-    const originalTxId = txn.originalTransactionId;
-
-    console.log(`[Apple Webhook] ${notificationType}/${subtype} userId=${userId} product=${productId}`);
-
-    if (!userId) { res.sendStatus(200); return; } // can't map without userId
-
-    const statusMap = {
-      DID_RENEW: 'active',
-      DID_FAIL_TO_RENEW: 'grace_period',
-      EXPIRED: 'expired',
-      REVOKE: 'refunded',
-      REFUND: 'refunded',
-      CANCEL: 'canceled',
-    };
-    const status = statusMap[notificationType] || 'active';
-
-    await ensureUser(userId);
-    await upsertSubscription({ userId, platform: 'ios', productId, status, originalTransactionId: originalTxId, expiresAt });
-
-    res.sendStatus(200);
-  } catch (e) {
-    console.error('[Apple Webhook] Error:', e.message);
-    res.sendStatus(200); // always 200 to Apple
-  }
-});
-
-// ── Google webhook (Pub/Sub push) ─────────────────────────────────────────────
-app.post('/v1/webhooks/google', async (req, res) => {
-  try {
-    const message = req.body?.message;
-    if (!message?.data) return res.sendStatus(200);
-
-    const data = JSON.parse(Buffer.from(message.data, 'base64').toString());
-    const { subscriptionNotification, packageName } = data;
-    if (!subscriptionNotification) return res.sendStatus(200);
-
-    const { notificationType, purchaseToken, subscriptionId } = subscriptionNotification;
-
-    // Notification types: 1=RECOVER, 2=RENEW, 3=CANCEL, 4=PURCHASE, 5=ON_HOLD,
-    //                     6=IN_GRACE_PERIOD, 7=RESTARTED, 12=EXPIRED, 13=REVOKED, 20=PAUSE_SCHEDULE_CHANGED
-    const statusMap = {
-      1: 'active', 2: 'active', 4: 'active', 7: 'active',
-      3: 'canceled', 5: 'grace_period', 6: 'grace_period',
-      12: 'expired', 13: 'refunded',
-    };
-    const status = statusMap[notificationType] || 'active';
-
-    console.log(`[Google Webhook] type=${notificationType} status=${status} product=${subscriptionId}`);
-
-    // Re-verify with Play API to get expiry and userId
-    if (GOOGLE_SERVICE_ACCOUNT_JSON) {
-      const validation = await validateGooglePurchase(subscriptionId, purchaseToken);
-      // Note: Google doesn't send userId in webhook — use obfuscatedExternalAccountId
-      // This requires setting obfuscatedAccountId during purchase on the client
-      // For now log it and let the next app launch re-validate
-      console.log(`[Google Webhook] Revalidated: valid=${validation.valid} expires=${validation.expiresAt}`);
-    }
-
-    res.sendStatus(200);
-  } catch (e) {
-    console.error('[Google Webhook] Error:', e.message);
-    res.sendStatus(200);
-  }
-});
 
 // ==========================================
 // EMERGENCY SMS (Twilio - server-side auto-send)
