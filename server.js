@@ -39,10 +39,10 @@ app.use(express.json());
 // Environment variables
 const KIMI_API_KEY = process.env.KIMI_API_KEY ? process.env.KIMI_API_KEY.trim() : null;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-in-production';
+const APP_SECRET = process.env.APP_SECRET || null;
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || null;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || null;
 const TWILIO_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || null;
-const APPLE_SHARED_SECRET = process.env.APPLE_SHARED_SECRET || null;
 const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || null;
 const PORT = 3000;
 
@@ -845,6 +845,16 @@ const requireAuth = (req, res, next) => {
   next();
 };
 
+// Reject requests that don't come from the official app
+const requireAppSecret = (req, res, next) => {
+  if (!APP_SECRET) return next(); // not configured — skip (dev mode)
+  const secret = req.headers['x-app-secret'];
+  if (!secret || secret !== APP_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+};
+
 const checkAccess = async (req, res, next) => {
   const userId = req.userId;
 
@@ -1239,7 +1249,7 @@ function predictHypoRisk(params) {
 // VICENTE CHAT WITH NATIVE TOOL CALLS
 // ==========================================
 
-app.post('/v1/vicente/chat', requireAuth, checkAccess, async (req, res) => {
+app.post('/v1/vicente/chat', requireAppSecret, requireAuth, checkAccess, async (req, res) => {
   console.log('Received chat request from:', req.userId);
   
   try {
@@ -1646,7 +1656,7 @@ async function validateGooglePurchase(productId, purchaseToken) {
 // Called by the app when a critical low is detected and the user cannot confirm manually.
 // Charges the SMS cost back to the user subscription via the sms_log table (app-side).
 // Requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID env vars on Railway.
-app.post('/v1/emergency/sms', requireAuth, async (req, res) => {
+app.post('/v1/emergency/sms', requireAppSecret, requireAuth, async (req, res) => {
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_MESSAGING_SERVICE_SID) {
     return res.status(503).json({ error: 'SMS service not configured' });
   }
