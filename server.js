@@ -916,7 +916,7 @@ const checkAccess = async (req, res, next) => {
     next();
   } catch (e) {
     console.error('[checkAccess] DB error:', e.message);
-    next(); // fail open — don't block users if DB has a hiccup
+    return res.status(503).json({ error: 'Service temporarily unavailable' });
   }
 };
 
@@ -934,25 +934,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Minimal Kimi ping — no tools, no context, just "hello"
-// GET /v1/ping-kimi  (no auth required, debug only)
-app.get('/v1/ping-kimi', async (req, res) => {
-  if (!KIMI_API_KEY) return res.status(500).json({ error: 'No API key' });
-  try {
-    const r = await fetch('https://api.moonshot.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${KIMI_API_KEY}` },
-      body: JSON.stringify({
-        model: 'kimi-k2.5',
-        messages: [{ role: 'user', content: 'say hi' }]
-      })
-    });
-    const text = await r.text();
-    res.json({ status: r.status, body: text });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
-});
 
 // ==========================================
 // CALCULATION FUNCTIONS (Executed when Kimi calls tools)
