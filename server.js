@@ -562,7 +562,7 @@ const VICENTE_TOOLS = [
     type: "function",
     function: {
       name: "logSleep",
-      description: "Save a sleep entry. Call when user tells you about their sleep. Only call after checkRecentLog confirms it is not already logged.",
+      description: "Save a completed sleep entry. Only call when the user reports waking up or tells you about sleep they already had. NEVER call this when the user says they are going to sleep — there is no data yet. Wait until they wake up and report how they slept.",
       parameters: {
         type: "object",
         required: ["totalHours"],
@@ -1391,7 +1391,15 @@ After setPreference or logEvent calls that reveal personal info, always consider
    - Suggest an absorption profile: fast / medium / slow
    - Suggest whether to pre-bolus and by how many minutes given their current glucose and IOB
    - Format clearly: food name, macros table, then your T1D-specific advice
-   - If the image is NOT food, just respond naturally in your Vicente persona — no need to force a nutrition analysis`;
+   - If the image is NOT food, just respond naturally in your Vicente persona — no need to force a nutrition analysis
+
+LANGUAGE:
+Always reply in the same language the user writes in. If they write in English, reply in English. Spanish → Spanish. Never switch languages mid-conversation unless the user does first.
+
+GLUCOSE CONTEXT:
+Current glucose is already available in the CURRENT HEALTH DATA section above (context.currentGlucose).
+NEVER ask the user "what's your glucose?" — you already have it. Read it from context and use it directly.
+Only ask if the data is missing or stale (minutesAgo > 30).`;
 
     // Build messages array — inject session history between system prompt and current message
     // This gives Vicente memory within a report chat session without polluting main history
