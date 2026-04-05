@@ -433,24 +433,32 @@ const VICENTE_TOOLS = [
     type: "function",
     function: {
       name: "logInsulinDose",
-      description: "Save an insulin dose to the log. ALWAYS call this when the user says they took, injected, or dosed any insulin units. Do not just say you logged it — call this tool.",
+      description: "Save an insulin dose to the log. ALWAYS call this when the user says they took, injected, or dosed any insulin units. Do not just say you logged it — call this tool. If the dose covers both food and a correction (e.g. '6u for the meal and 3u correction'), pass foodBolusUnits and correctionUnits separately — units should always be the total.",
       parameters: {
         type: "object",
         required: ["units", "insulinType"],
         properties: {
           units: {
             type: "number",
-            description: "Number of insulin units taken"
+            description: "Total insulin units taken (sum of food bolus + correction if split)"
           },
           insulinType: {
             type: "string",
             enum: ["rapid", "ultra_rapid", "long_acting"],
             description: "Type of insulin: rapid (Humalog/NovoLog), ultra_rapid (Fiasp/Lyumjev), long_acting (Lantus/Tresiba/Basaglar)"
           },
+          foodBolusUnits: {
+            type: "number",
+            description: "Units given to cover food/carbs (omit if pure correction)"
+          },
+          correctionUnits: {
+            type: "number",
+            description: "Units given to correct high glucose (omit if pure food bolus)"
+          },
           isCorrection: {
             type: "boolean",
             default: false,
-            description: "True if this is a correction dose (not for food)"
+            description: "True if any part of this dose is a correction"
           },
           correctionReason: {
             type: "string",
@@ -459,7 +467,7 @@ const VICENTE_TOOLS = [
           mealType: {
             type: "string",
             enum: ["breakfast", "lunch", "dinner", "snack"],
-            description: "Meal this insulin is for (if not a correction)"
+            description: "Meal this insulin is for (if not a pure correction)"
           },
           carbsG: {
             type: "number",
@@ -1424,9 +1432,10 @@ This applies to every companion, every persona, every situation. No exceptions.`
       }
     }
     // Add image if provided — attach to the last (current) user message
+    // image arrives as a full data URI (data:image/jpeg;base64,...) — use it directly
     if (req.body.image) {
       messages.push({ role: 'user', content: [
-        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${req.body.image}` } },
+        { type: 'image_url', image_url: { url: req.body.image } },
         { type: 'text', text: message || 'What is this food? Estimate the macros and give me T1D advice.' }
       ]});
     } else {
